@@ -1,12 +1,14 @@
 import gleam/erlang/process.{type Subject}
 import gleam/function
 import gleam/otp/actor
+import kino/internal/dynamic_supervisor
+import kino/internal/supervisor
 
 pub opaque type Context(message) {
   Context(self: ActorRef(message))
 }
 
-pub fn start() -> Context(message) {
+fn start() -> Context(message) {
   process.new_subject()
   |> ActorRef
   |> Context
@@ -17,14 +19,6 @@ pub opaque type Behavior(message) {
   Init(handler: fn(Context(message)) -> Behavior(message))
   Continue
   Stop
-}
-
-pub opaque type Supervisor(message) {
-  Supervisor(Behavior(message))
-}
-
-pub fn supervise(behavior: Behavior(message)) -> Supervisor(message) {
-  Supervisor(behavior)
 }
 
 pub const receive = Receive
@@ -52,6 +46,10 @@ pub fn spawn_link(behavior: Behavior(b), _name: String) -> ActorRef(b) {
 
 pub fn self(context: Context(message)) -> ActorRef(message) {
   context.self
+}
+
+pub fn owner(actor: ActorRef(message)) -> process.Pid {
+  process.subject_owner(actor.subject)
 }
 
 pub fn send(actor: ActorRef(message), message: message) -> Nil {
@@ -121,4 +119,74 @@ fn loop(
       actor.continue(State(context, next_behavior))
     }
   }
+}
+
+// Supervision :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+// pub opaque type Supervisor(message) {
+//   Supervisor(Behavior(message))
+// }
+
+// pub fn supervise(behavior: Behavior(message)) -> Supervisor(message) {
+//   Supervisor(behavior)
+// }
+
+pub opaque type Supervisor {
+  Supervisor(builder: supervisor.Builder)
+}
+
+pub opaque type SupervisorRef {
+  SupervisorRef(pid: process.Pid)
+}
+
+pub opaque type DynamicSupervisor(init_arg) {
+  DynamicSupervisor(builder: dynamic_supervisor.Builder(init_arg))
+}
+
+pub opaque type DynamicSupervisorRef(init_arg) {
+  DynamicSupervisorRef(pid: process.Pid)
+}
+
+pub fn new_supervisor() -> Supervisor {
+  supervisor.new(supervisor.OneForOne) |> Supervisor
+}
+
+pub fn add_worker(
+  supervisor: Supervisor,
+  starter: fn() -> Behavior(a),
+) -> Supervisor {
+  supervisor.builder |> supervisor.add(child_spec(starter)) |> Supervisor
+}
+
+pub fn add_supervisor(supervisor: Supervisor, child: Supervisor) -> Supervisor {
+  supervisor.builder
+  |> supervisor.add(supervisor_child_spec(child))
+  |> Supervisor
+}
+
+pub fn add_dynamic_supervisor(
+  supervisor: Supervisor,
+  child: DynamicSupervisor(a),
+) -> Supervisor {
+  supervisor.builder
+  |> supervisor.add(dynamic_supervisor_child_spec(child))
+  |> Supervisor
+}
+
+pub fn new_dynamic_supervisor(
+  starter: fn(init_arg) -> Behavior(a),
+) -> DynamicSupervisor(init_arg) {
+  todo
+}
+
+pub fn child_spec(starter: fn() -> Behavior(a)) {
+  todo
+}
+
+pub fn supervisor_child_spec(supervisor: Supervisor) {
+  todo
+}
+
+pub fn dynamic_supervisor_child_spec(supervisor: DynamicSupervisor(a)) {
+  todo
 }
