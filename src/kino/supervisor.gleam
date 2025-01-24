@@ -1,6 +1,6 @@
 import gleam/erlang/process.{type Pid}
-import kino.{type ActorRef, type Behavior}
 import kino/internal/supervisor
+import kino_old.{type ActorRef, type Behavior} as kino
 
 pub opaque type Spec {
   Spec(init: fn(Pid) -> supervisor.Builder)
@@ -67,13 +67,12 @@ pub fn supervisor_child(
 pub fn start_child(sup: SupervisorRef, child: Child(a)) {
   supervisor.start_child(sup.pid, child.builder)
 }
+// fn example() {
+//   use self <- init()
+//   new(supervisor.OneForOne)
+//   |> add(worker_child("worker", "worker", worker(self)))
+// }
 
-fn example() {
-  use self <- init()
-  new(supervisor.OneForOne)
-  |> add(worker_child("worker", "worker", worker(self)))
-}
-
-fn worker(sup: SupervisorRef) -> Behavior(a) {
-  kino.continue
-}
+// fn worker(sup: SupervisorRef) -> Behavior(a) {
+//   kino.continue
+// }

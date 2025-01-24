@@ -1,192 +1,187 @@
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Subject}
-import gleam/function
-import gleam/otp/actor
-import kino/internal/dynamic_supervisor
-import kino/internal/supervisor
+import gleam/result
+import kino/internal/gen_server
+
+pub opaque type ActorRef(message) {
+  ActorRef(ref: gen_server.GenServer(message, Behavior(message)))
+}
+
+pub fn send(actor: ActorRef(message), message: message) -> Nil {
+  gen_server.cast(actor.ref, message)
+}
+
+pub fn call(
+  actor: ActorRef(request),
+  make_request: fn(Subject(response)) -> request,
+  within timeout: Int,
+) -> response {
+  let assert Ok(resp) = try_call(actor, make_request, timeout)
+  resp
+}
+
+pub fn try_call(
+  actor: ActorRef(request),
+  make_request: fn(Subject(response)) -> request,
+  within timeout: Int,
+) -> Result(response, process.CallError(response)) {
+  let reply_subject = process.new_subject()
+
+  // Monitor the callee process so we can tell if it goes down (meaning we
+  // won't get a reply)
+  let owner = gen_server.owner(actor.ref)
+  let monitor = process.monitor_process(owner)
+
+  // Send the request to the process over the channel
+  send(actor, make_request(reply_subject))
+
+  // Await a reply or handle failure modes (timeout, process down, etc)
+  let result =
+    process.new_selector()
+    |> process.selecting(reply_subject, Ok)
+    |> process.selecting_process_down(monitor, fn(down: process.ProcessDown) {
+      Error(process.CalleeDown(reason: down.reason))
+    })
+    |> process.select(timeout)
+
+  // Demonitor the process and close the channels as we're done
+  process.demonitor_process(monitor)
+
+  // Prepare an appropriate error (if present) for the caller
+  case result {
+    Error(Nil) -> Error(process.CallTimeout)
+    Ok(res) -> res
+  }
+}
+
+pub fn call_forever(
+  actor: ActorRef(request),
+  make_request: fn(Subject(response)) -> request,
+) -> response {
+  let assert Ok(resp) = try_call_forever(actor, make_request)
+  resp
+}
+
+pub fn try_call_forever(
+  actor: ActorRef(request),
+  make_request: fn(Subject(response)) -> request,
+) -> Result(response, process.CallError(c)) {
+  let reply_subject = process.new_subject()
+
+  // Monitor the callee process so we can tell if it goes down (meaning we
+  // won't get a reply)
+  let owner = gen_server.owner(actor.ref)
+  let monitor = process.monitor_process(owner)
+
+  // Send the request to the process over the channel
+  send(actor, make_request(reply_subject))
+
+  // Await a reply or handle failure modes (timeout, process down, etc)
+  let result =
+    process.new_selector()
+    |> process.selecting(reply_subject, Ok)
+    |> process.selecting_process_down(monitor, fn(down) {
+      Error(process.CalleeDown(reason: down.reason))
+    })
+    |> process.select_forever
+
+  // Demonitor the process and close the channels as we're done
+  process.demonitor_process(monitor)
+
+  result
+}
 
 pub opaque type Context(message) {
   Context(self: ActorRef(message))
-}
-
-fn start() -> Context(message) {
-  process.new_subject()
-  |> ActorRef
-  |> Context
-}
-
-pub opaque type Behavior(message) {
-  Receive(handler: fn(Context(message), message) -> Behavior(message))
-  Init(handler: fn(Context(message)) -> Behavior(message))
-  Continue
-  Stop
-}
-
-pub const receive = Receive
-
-pub const init = Init
-
-pub const continue: Behavior(message) = Continue
-
-pub const stopped: Behavior(message) = Stop
-
-pub opaque type ActorRef(message) {
-  ActorRef(subject: Subject(message))
-}
-
-pub fn spawn_link(behavior: Behavior(b), _name: String) -> ActorRef(b) {
-  let subject =
-    new_spec(behavior)
-    |> actor.start_spec
-
-  case subject {
-    Ok(subject) -> ActorRef(subject)
-    Error(_) -> panic as "failed to start actor"
-  }
 }
 
 pub fn self(context: Context(message)) -> ActorRef(message) {
   context.self
 }
 
-pub fn owner(actor: ActorRef(message)) -> process.Pid {
-  process.subject_owner(actor.subject)
+pub opaque type Behavior(message) {
+  Receive(on_receive: fn(Context(message), message) -> Behavior(message))
+  Init(on_init: fn(Context(message)) -> Behavior(message))
+  Continue
+  Stop
 }
 
-pub fn send(actor: ActorRef(message), message: message) -> Nil {
-  process.send(actor.subject, message)
-}
+pub const init = Init
 
-fn new_spec(behavior: Behavior(message)) -> Spec(message) {
-  actor.Spec(
-    init: fn() {
-      case behavior {
-        Init(handler) -> {
-          let context = start()
-          let next = handler(context)
-          let state = State(context, next)
-          let selector =
-            process.new_selector()
-            |> process.selecting(context.self.subject, function.identity)
-          actor.Ready(state, selector)
-        }
+pub const receive = Receive
 
-        _ -> {
-          let context = start()
-          let state = State(context, behavior)
-          let selector =
-            process.new_selector()
-            |> process.selecting(context.self.subject, function.identity)
-          actor.Ready(state, selector)
-        }
-      }
-    },
-    init_timeout: 5000,
-    loop: loop,
-  )
+pub const continue: Behavior(message) = Continue
+
+pub const stopped: Behavior(message) = Stop
+
+pub fn start_link(
+  behavior: Behavior(message),
+) -> Result(ActorRef(message), Dynamic) {
+  let spec = new_spec(behavior)
+  let ref = gen_server.start_link(spec, Nil)
+  result.map(ref, ActorRef)
 }
 
 type State(message) {
-  State(Context(message), Behavior(message))
+  State(context: Context(message), behavior: Behavior(message))
 }
 
-type Spec(message) =
-  actor.Spec(State(message), message)
+fn new_spec(
+  behavior: Behavior(message),
+) -> gen_server.Spec(init_args, message, Behavior(message), State(message)) {
+  gen_server.Spec(
+    init: fn(_) {
+      case behavior {
+        Init(on_init) -> {
+          let context = new_context()
+          let next = on_init(context)
+          let state = State(context, next)
+          Ok(state)
+        }
+        _ -> {
+          let context = new_context()
+          let state = State(context, behavior)
+          Ok(state)
+        }
+      }
+    },
+    handle_call:,
+    handle_cast:,
+    terminate:,
+  )
+}
 
-fn loop(
-  message: message,
-  state: State(message),
-) -> actor.Next(message, State(message)) {
+fn new_context() -> Context(message) {
+  Context(ActorRef(gen_server.self()))
+}
+
+fn handle_call(
+  _message,
+  _from,
+  state: state,
+) -> gen_server.Response(response, state) {
+  gen_server.Noreply(state)
+}
+
+fn terminate(_reason, _state) -> Dynamic {
+  dynamic.from(Nil)
+}
+
+fn handle_cast(message: message, state: State(message)) {
   let State(context, behavior) = state
   case behavior {
-    Stop -> {
-      actor.Stop(process.Normal)
-    }
-
-    Continue -> {
-      actor.continue(state)
-    }
-
-    Receive(handler) -> {
-      let next_behavior = handler(context, message)
-      case next_behavior {
-        Continue -> actor.continue(state)
-        _ -> actor.continue(State(context, next_behavior))
+    Receive(on_receive) -> {
+      case on_receive(context, message) {
+        Continue -> gen_server.Noreply(state)
+        next -> gen_server.Noreply(State(context, next))
       }
     }
-
-    Init(handler) -> {
-      let next_behavior = handler(context)
-      actor.continue(State(context, next_behavior))
+    Init(on_init) -> {
+      let next = on_init(context)
+      let state = State(context, next)
+      gen_server.Noreply(state)
     }
+    Continue -> gen_server.Noreply(state)
+    Stop -> gen_server.Stop(process.Normal, state)
   }
-}
-
-// Supervision :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-
-// pub opaque type Supervisor(message) {
-//   Supervisor(Behavior(message))
-// }
-
-// pub fn supervise(behavior: Behavior(message)) -> Supervisor(message) {
-//   Supervisor(behavior)
-// }
-
-pub opaque type Supervisor {
-  Supervisor(builder: supervisor.Builder)
-}
-
-pub opaque type SupervisorRef {
-  SupervisorRef(pid: process.Pid)
-}
-
-pub opaque type DynamicSupervisor(init_arg) {
-  DynamicSupervisor(builder: dynamic_supervisor.Builder(init_arg))
-}
-
-pub opaque type DynamicSupervisorRef(init_arg) {
-  DynamicSupervisorRef(pid: process.Pid)
-}
-
-pub fn new_supervisor() -> Supervisor {
-  supervisor.new(supervisor.OneForOne) |> Supervisor
-}
-
-pub fn add_worker(
-  supervisor: Supervisor,
-  starter: fn() -> Behavior(a),
-) -> Supervisor {
-  supervisor.builder |> supervisor.add(child_spec(starter)) |> Supervisor
-}
-
-pub fn add_supervisor(supervisor: Supervisor, child: Supervisor) -> Supervisor {
-  supervisor.builder
-  |> supervisor.add(supervisor_child_spec(child))
-  |> Supervisor
-}
-
-pub fn add_dynamic_supervisor(
-  supervisor: Supervisor,
-  child: DynamicSupervisor(a),
-) -> Supervisor {
-  supervisor.builder
-  |> supervisor.add(dynamic_supervisor_child_spec(child))
-  |> Supervisor
-}
-
-pub fn new_dynamic_supervisor(
-  starter: fn(init_arg) -> Behavior(a),
-) -> DynamicSupervisor(init_arg) {
-  todo
-}
-
-pub fn child_spec(starter: fn() -> Behavior(a)) {
-  todo
-}
-
-pub fn supervisor_child_spec(supervisor: Supervisor) {
-  todo
-}
-
-pub fn dynamic_supervisor_child_spec(supervisor: DynamicSupervisor(a)) {
-  todo
 }

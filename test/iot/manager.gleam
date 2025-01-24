@@ -1,8 +1,8 @@
 import gleam/dict.{type Dict}
 import iot/group
-import kino.{type ActorRef, type Behavior}
 import kino/internal/supervisor as internal
 import kino/supervisor.{type SupervisorRef}
+import kino_old.{type ActorRef, type Behavior} as kino
 
 pub type Message {
   AddDevice(group_id: String, device_id: String)
@@ -47,15 +47,15 @@ fn do_worker(
           kino.continue
         }
         _ -> {
-          let asdf =
-            supervisor.start_child(
-              sup,
-              supervisor.worker_child(
-                "group_worker",
-                "group_worker-" <> group_id,
-                group.worker(group_id),
-              ),
-            )
+          // let asdf =
+          //   supervisor.start_child(
+          //     sup,
+          //     supervisor.worker_child(
+          //       "group_worker",
+          //       "group_worker-" <> group_id,
+          //       group.worker(group_id),
+          //     ),
+          //   )
           let group = kino.spawn_link(group.worker(group_id), group_id)
           kino.send(group, group.AddDevice(device_id))
           do_worker(sup, dict.insert(groups, group_id, group))

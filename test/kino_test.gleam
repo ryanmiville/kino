@@ -1,119 +1,69 @@
+import gleam/erlang/process.{type Subject}
 import gleeunit
-import gleeunit/should
+import kino/gen_server.{type Behavior}
 
 pub fn main() {
   gleeunit.main()
 }
 
-pub fn kino_test() {
-  1 |> should.equal(1)
+pub fn example_test() {
+  let assert Ok(srv) = start_link()
+  gen_server.send(srv, Push("Joe"))
+  gen_server.send(srv, Push("Mike"))
+  gen_server.send(srv, Push("Robert"))
+
+  let assert Ok(Ok("Robert")) = gen_server.try_call(srv, Pop, 10)
+  let assert Ok(Ok("Mike")) = gen_server.try_call(srv, Pop, 10)
+  let assert Ok(Ok("Joe")) = gen_server.try_call(srv, Pop, 10)
+
+  // The stack is now empty, so if we pop again the actor replies with an error.
+  let assert Ok(Error(Nil)) = gen_server.try_call(srv, Pop, 10)
+  // Lastly, we can send a message to the actor asking it to shut down.
+  gen_server.send(srv, Shutdown)
 }
-// type TestMsg {
-//   Send(reply_to: process.Subject(String))
-//   Wait(value: Int, reply_to: process.Subject(Int))
-//   Kill
-//   Shutdown
-// }
 
-// fn default_handle(msg: TestMsg, _state: Nil) {
-//   case msg {
-//     Send(reply_to:) -> {
-//       logging.log(logging.Info, "received Send")
-//       process.send(reply_to, "Sent")
-//       actor.continue(Nil)
-//     }
-//     Wait(value:, reply_to:) -> {
-//       logging.log(logging.Info, "received Wait")
-//       process.sleep(value)
-//       process.send(reply_to, value)
-//       actor.continue(Nil)
-//     }
+pub type Message(element) {
 
-//     Kill -> {
-//       logging.log(logging.Info, "received Kill")
-//       panic as "crashed in handle"
-//     }
+  Shutdown
 
-//     Shutdown -> {
-//       logging.log(logging.Info, "received Shutdown")
-//       actor.Stop(process.Normal)
-//     }
-//   }
-// }
+  Push(push: element)
 
-// // fn default_spec() {
-// //   actor.Spec(
-// //     init_timeout: 1000,
-// //     init: fn() { actor.Ready(state: Nil, selector: process.new_selector()) },
-// //     loop: default_handle,
-// //   )
-// // }
+  Pop(reply_to: Subject(Result(element, Nil)))
+}
 
-// // pub fn send_test() {
-// //   let assert Ok(ref) = kino.start(Nil, default_handle)
-// //   let self_subject = process.new_subject()
+pub fn new_stack_server() -> Behavior(Message(element)) {
+  use _context <- gen_server.init()
+  stack_server([])
+}
 
-// //   kino.send(ref, Send(self_subject))
-// //   kino.send(ref, Send(self_subject))
+fn stack_server(stack: List(element)) -> Behavior(Message(element)) {
+  use _context, message <- gen_server.receive()
+  case message {
+    Push(value) -> {
+      let new_stack = [value, ..stack]
+      stack_server(new_stack)
+    }
 
-// //   process.receive(self_subject, 1000)
-// //   |> should.equal(Ok("Sent"))
+    Pop(reply_to:) -> {
+      case stack {
+        [] -> {
+          process.send(reply_to, Error(Nil))
+          stack_server(stack)
+        }
 
-// //   process.receive(self_subject, 1000)
-// //   |> should.equal(Ok("Sent"))
+        [first, ..rest] -> {
+          process.send(reply_to, Ok(first))
+          stack_server(rest)
+        }
+      }
+    }
 
-// //   process.receive(self_subject, 1000)
-// //   |> should.equal(Error(Nil))
-// // }
+    Shutdown -> {
+      gen_server.stopped
+    }
+  }
+}
 
-// // pub fn call_test() {
-// //   let assert Ok(ref) = kino.start(Nil, default_handle)
-
-// //   kino.call(ref, Wait(100, _), 500)
-// //   |> should.equal(100)
-
-// //   kino.call(ref, Wait(50, _), 500)
-// //   |> should.equal(50)
-// // }
-
-// // pub fn try_call_test() {
-// //   let assert Ok(ref) = kino.start(Nil, default_handle)
-
-// //   // Send a wait message that takes a long time
-// //   let handle = task.async(fn() { kino.call(ref, Wait(1000, _), 1250) })
-
-// //   // Wait to let the other process start
-// //   process.sleep(100)
-
-// //   kino.try_call(ref, Wait(1, _), 200)
-// //   |> should.be_error
-
-// //   // Wait for the other process to finish
-// //   task.try_await(handle, 1000)
-// //   |> should.equal(Ok(1000))
-// // }
-
-// pub fn restart_test() {
-//   let self = process.new_subject()
-//   // process.start(
-//   //   fn() {
-//   //     let assert Ok(ref) = kino.start(Nil, default_handle)
-//   //     process.send(self, ref)
-//   //     process.sleep_forever()
-//   //   },
-//   //   False,
-//   // )
-
-//   let assert Ok(ref) = kino.start(Nil, default_handle)
-
-//   kino.send(ref, Wait(1000, self))
-//   kino.send(ref, Kill)
-//   kino.send(ref, Wait(100, self))
-//   process.sleep(2000)
-//   kino.send(ref, Wait(250, self))
-
-//   process.receive(self, 500)
-//   |> should.equal(Ok(1000))
-//   process.receive(self, 500)
-//   |> should.equal(Ok(250))
-// }
+pub fn start_link() {
+  gen_server.start_link(new_stack_server())
+}

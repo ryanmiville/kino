@@ -1,7 +1,6 @@
 import gleam/bool
 import gleam/erlang/process
 import gleam/int
-import gleam/list
 import kino.{type ActorRef, type Behavior}
 import logging
 
@@ -32,6 +31,7 @@ fn do_bot(count: Int, max: Int) -> Behavior(Greeted) {
   use context, Greeted(whom, from) <- kino.receive()
 
   let count = count + 1
+
   logging.log(
     logging.Info,
     "Greeting " <> int.to_string(count) <> " for " <> whom,
@@ -45,25 +45,22 @@ fn do_bot(count: Int, max: Int) -> Behavior(Greeted) {
 
 pub fn app() -> Behavior(SayHello) {
   use _context <- kino.init()
-  let greeter = kino.spawn_link(greeter(), "greeter")
+  let assert Ok(greeter) = kino.start_link(greeter())
   do_app(greeter)
 }
 
 fn do_app(greeter: ActorRef(Greet)) -> Behavior(SayHello) {
   use _context, SayHello(name) <- kino.receive()
-  let bot = kino.spawn_link(bot(3), name)
+  let assert Ok(bot) = kino.start_link(bot(3))
   kino.send(greeter, Greet(name, bot))
   kino.continue
 }
 
 pub fn main() {
   logging.configure()
-  // logging.set_level(logging.Critical)
 
-  let app = kino.spawn_link(app(), "app")
-  list.range(1, 100)
-  |> list.each(fn(i) { kino.send(app, SayHello(int.to_string(i))) })
-  // kino.send(app, SayHello("world"))
-  // kino.send(app, SayHello("kino"))
+  let assert Ok(app) = kino.start_link(app())
+  kino.send(app, SayHello("world"))
+  kino.send(app, SayHello("kino"))
   process.sleep(1000)
 }

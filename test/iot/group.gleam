@@ -1,6 +1,6 @@
 import gleam/dict.{type Dict}
 import iot/device
-import kino.{type ActorRef, type Behavior}
+import kino_old.{type ActorRef, type Behavior} as kino
 
 pub type Message {
   AddDevice(device_id: String)

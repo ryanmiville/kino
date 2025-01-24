@@ -1,10 +1,11 @@
 import gleam/dynamic.{type Dynamic}
-import gleam/erlang/atom
+import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type ExitReason, type Pid}
 import gleam/result
 
-pub opaque type Server(message, reply) {
-  Server(pid: Pid)
+pub opaque type GenServer(message, reply) {
+  PidRef(Pid)
+  NameRef(Atom)
 }
 
 pub type From(accepts)
@@ -18,6 +19,10 @@ pub type Spec(init_args, message, reply, state) {
   )
 }
 
+pub fn self() -> GenServer(message, reply) {
+  PidRef(process.self())
+}
+
 pub type Response(reply, state) {
   Reply(reply, state)
   Noreply(state)
@@ -27,33 +32,53 @@ pub type Response(reply, state) {
 pub fn start_link(
   spec: Spec(init_args, message, reply, state),
   args: init_args,
-) -> Result(Server(message, reply), Dynamic) {
-  do_start_link(#(spec, args)) |> result.map(Server)
+) -> Result(GenServer(message, reply), Dynamic) {
+  do_start_link(#(spec, args)) |> result.map(PidRef)
+}
+
+pub fn owner(server: GenServer(a, b)) -> Pid {
+  case server {
+    PidRef(pid) -> pid
+    NameRef(_name) -> panic as "not implemented"
+  }
 }
 
 pub fn call(
-  server: Server(message, reply),
+  server: GenServer(message, reply),
   message: message,
   timeout: Int,
 ) -> reply {
-  do_call(server.pid, message, dynamic.from(timeout))
+  let timeout = dynamic.from(timeout)
+  case server {
+    PidRef(pid) -> do_call(dynamic.from(pid), message, timeout)
+    NameRef(name) -> do_call(dynamic.from(name), message, timeout)
+  }
 }
 
-pub fn call_forever(server: Server(message, reply), message: message) -> reply {
+pub fn call_forever(
+  server: GenServer(message, reply),
+  message: message,
+) -> reply {
   let timeout = atom.create_from_string("infinity") |> dynamic.from
-  do_call(server.pid, message, timeout)
+  case server {
+    PidRef(pid) -> do_call(dynamic.from(pid), message, timeout)
+    NameRef(name) -> do_call(dynamic.from(name), message, timeout)
+  }
 }
 
-pub fn cast(server: Server(message, reply), message: message) -> Nil {
-  let _ = do_cast(server.pid, message)
+pub fn cast(server: GenServer(message, reply), message: message) -> Nil {
+  let _ = case server {
+    PidRef(pid) -> do_cast(dynamic.from(pid), message)
+    NameRef(name) -> do_cast(dynamic.from(name), message)
+  }
   Nil
 }
 
 @external(erlang, "gen_server", "call")
-fn do_call(pid: Pid, message: message, timeout: Dynamic) -> reply
+fn do_call(id: Dynamic, message: message, timeout: Dynamic) -> reply
 
 @external(erlang, "gen_server", "cast")
-fn do_cast(pid: Pid, message: message) -> Result(Nil, never)
+fn do_cast(id: Dynamic, message: message) -> Result(Nil, never)
 
 @internal
 pub type State(init_args, message, reply, state) {
