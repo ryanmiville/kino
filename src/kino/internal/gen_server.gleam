@@ -19,8 +19,14 @@ pub type Spec(init_args, message, reply, state) {
   )
 }
 
+// TODO this is a hack
 pub fn self() -> GenServer(message, reply) {
   PidRef(process.self())
+}
+
+// TODO this is a hack
+pub fn from_pid(pid: Pid) -> GenServer(message, reply) {
+  PidRef(pid)
 }
 
 pub type Response(reply, state) {

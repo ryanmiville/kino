@@ -1,7 +1,7 @@
 -module(kino_ffi).
 
 -export([
-    server_start_link/1, supervisor_start_link/1
+    server_start_link/1, supervisor_start_link/1, supervisor_start_child/2
 ]).
 
 server_start_link(Arg) ->
@@ -14,4 +14,10 @@ supervisor_start_link(Arg) ->
     case supervisor:start_link(kino@internal@supervisor, Arg) of
         {ok, P} -> {ok, P};
         {error, E} -> {error, {init_crashed, E}}
+    end.
+
+supervisor_start_child(SupRef, ChildSpec) ->
+    case supervisor:start_child(SupRef, ChildSpec) of
+        {ok, P} -> {ok, P};
+        {error, E} -> {error, E}
     end.

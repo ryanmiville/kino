@@ -1,10 +1,21 @@
 import gleam/dynamic.{type Dynamic}
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Pid, type Subject}
 import gleam/result
 import kino/internal/gen_server
 
 pub opaque type ActorRef(message) {
   ActorRef(ref: gen_server.GenServer(message, Behavior(message)))
+}
+
+// TODO this is a hack
+pub fn from_gen_server(
+  ref: gen_server.GenServer(message, Behavior(message)),
+) -> ActorRef(message) {
+  ActorRef(ref)
+}
+
+pub fn owner(actor: ActorRef(message)) -> Pid {
+  gen_server.owner(actor.ref)
 }
 
 pub fn send(actor: ActorRef(message), message: message) -> Nil {

@@ -143,7 +143,7 @@ pub opaque type ChildBuilder {
     /// example in error messages.
     id: String,
     /// A function to call to start the child process.
-    starter: fn(Pid) -> Result(Pid, Dynamic),
+    starter: fn() -> Result(Pid, Dynamic),
     /// When the child is to be restarted. See the `Restart` documentation for
     /// more.
     ///
@@ -162,10 +162,9 @@ pub opaque type ChildBuilder {
   )
 }
 
-pub fn start_link_init(fun: fn(Pid) -> Builder) -> Result(Pid, Dynamic) {
-  let args = fn(pid) {
-    let builder = fun(pid)
-
+pub fn start_link(init: fn() -> Builder) -> Result(Pid, Dynamic) {
+  let args = fn() {
+    let builder = init()
     let flags =
       dict.new()
       |> property("strategy", builder.strategy)
@@ -173,37 +172,16 @@ pub fn start_link_init(fun: fn(Pid) -> Builder) -> Result(Pid, Dynamic) {
       |> property("period", builder.period)
       |> property("auto_shutdown", builder.auto_shutdown)
 
-    let children =
-      builder.children
-      |> list.reverse
-      |> list.map(convert_child_function)
-      |> list.map(fn(f) { f(pid) })
+    let children = builder.children |> list.reverse |> list.map(convert_child)
     #(flags, children)
   }
-  erlang_start_link(args)
-}
 
-pub fn start_link(builder: Builder) -> Result(Pid, Dynamic) {
-  let flags =
-    dict.new()
-    |> property("strategy", builder.strategy)
-    |> property("intensity", builder.intensity)
-    |> property("period", builder.period)
-    |> property("auto_shutdown", builder.auto_shutdown)
-
-  let children =
-    builder.children |> list.reverse |> list.map(convert_child_function)
-
-  let args = fn(pid) {
-    let children = list.map(children, fn(f) { f(pid) })
-    #(flags, children)
-  }
   erlang_start_link(args)
 }
 
 @external(erlang, "kino_ffi", "supervisor_start_link")
 fn erlang_start_link(
-  args: fn(Pid) -> #(Dict(Atom, Dynamic), List(Dict(Atom, Dynamic))),
+  args: fn() -> #(Dict(Atom, Dynamic), List(Dict(Atom, Dynamic))),
 ) -> Result(Pid, Dynamic)
 
 /// Add a child to the supervisor.
@@ -222,11 +200,11 @@ pub fn add(builder: Builder, child: ChildBuilder) -> Builder {
 ///
 pub fn worker_child(
   id id: String,
-  run starter: fn(Pid) -> Result(Pid, whatever),
+  run starter: fn() -> Result(Pid, whatever),
 ) -> ChildBuilder {
   ChildBuilder(
     id: id,
-    starter: fn(pid) { starter(pid) |> result.map_error(dynamic.from) },
+    starter: fn() { starter() |> result.map_error(dynamic.from) },
     restart: Permanent,
     significant: False,
     child_type: Worker(5000),
@@ -244,11 +222,11 @@ pub fn worker_child(
 ///
 pub fn supervisor_child(
   id id: String,
-  run starter: fn(Pid) -> Result(Pid, whatever),
+  run starter: fn() -> Result(Pid, whatever),
 ) -> ChildBuilder {
   ChildBuilder(
     id: id,
-    starter: fn(pid) { starter(pid) |> result.map_error(dynamic.from) },
+    starter: fn() { starter() |> result.map_error(dynamic.from) },
     restart: Permanent,
     significant: False,
     child_type: Supervisor,
@@ -290,66 +268,32 @@ pub fn restart(child: ChildBuilder, restart: Restart) -> ChildBuilder {
   ChildBuilder(..child, restart: restart)
 }
 
-pub fn start_child(sup: Pid, child: ChildBuilder) -> Result(Pid, Dynamic) {
-  let child = convert_child_function(child)(sup)
-  erlang_start_child(sup, child)
-}
+fn convert_child(child: ChildBuilder) -> Dict(Atom, Dynamic) {
+  let mfa = #(
+    atom.create_from_string("erlang"),
+    atom.create_from_string("apply"),
+    [dynamic.from(child.starter), dynamic.from([])],
+  )
 
-fn convert_child_function(child: ChildBuilder) -> fn(Pid) -> Dict(Atom, Dynamic) {
-  fn(pid) {
-    let mfa = #(
-      atom.create_from_string("erlang"),
-      atom.create_from_string("apply"),
-      [dynamic.from(child.starter), dynamic.from([pid])],
+  let #(type_, shutdown) = case child.child_type {
+    Supervisor -> #(
+      atom.create_from_string("supervisor"),
+      dynamic.from(atom.create_from_string("infinity")),
     )
-
-    let #(type_, shutdown) = case child.child_type {
-      Supervisor -> #(
-        atom.create_from_string("supervisor"),
-        dynamic.from(atom.create_from_string("infinity")),
-      )
-      Worker(timeout) -> #(
-        atom.create_from_string("worker"),
-        dynamic.from(timeout),
-      )
-    }
-
-    dict.new()
-    |> property("id", child.id)
-    |> property("start", mfa)
-    |> property("restart", child.restart)
-    |> property("significant", child.significant)
-    |> property("type", type_)
-    |> property("shutdown", shutdown)
+    Worker(timeout) -> #(
+      atom.create_from_string("worker"),
+      dynamic.from(timeout),
+    )
   }
+
+  dict.new()
+  |> property("id", child.id)
+  |> property("start", mfa)
+  |> property("restart", child.restart)
+  |> property("significant", child.significant)
+  |> property("type", type_)
+  |> property("shutdown", shutdown)
 }
-
-// fn convert_child(child: ChildBuilder) -> Dict(Atom, Dynamic) {
-//   let mfa = #(
-//     atom.create_from_string("erlang"),
-//     atom.create_from_string("apply"),
-//     [dynamic.from(child.starter), dynamic.from([])],
-//   )
-
-//   let #(type_, shutdown) = case child.child_type {
-//     Supervisor -> #(
-//       atom.create_from_string("supervisor"),
-//       dynamic.from(atom.create_from_string("infinity")),
-//     )
-//     Worker(timeout) -> #(
-//       atom.create_from_string("worker"),
-//       dynamic.from(timeout),
-//     )
-//   }
-
-//   dict.new()
-//   |> property("id", child.id)
-//   |> property("start", mfa)
-//   |> property("restart", child.restart)
-//   |> property("significant", child.significant)
-//   |> property("type", type_)
-//   |> property("shutdown", shutdown)
-// }
 
 fn property(
   dict: Dict(Atom, Dynamic),
@@ -361,12 +305,16 @@ fn property(
 
 // Callback used by the Erlang supervisor module.
 @internal
-pub fn init(start_data: fn(Pid) -> Dynamic) -> Result(Dynamic, never) {
-  Ok(start_data(process.self()))
+pub fn init(start_data: fn() -> Dynamic) -> Result(Dynamic, never) {
+  Ok(start_data())
+}
+
+pub fn start_child(supervisor: Pid, child: ChildBuilder) -> Result(Pid, Dynamic) {
+  erlang_start_child(supervisor, convert_child(child))
 }
 
 @external(erlang, "kino_ffi", "supervisor_start_child")
 fn erlang_start_child(
-  sup: Pid,
+  supervisor: Pid,
   child: Dict(Atom, Dynamic),
 ) -> Result(Pid, Dynamic)

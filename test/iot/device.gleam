@@ -1,4 +1,5 @@
-import kino_old.{type ActorRef, type Behavior} as kino
+import kino.{type ActorRef, type Behavior}
+import kino/supervisor
 
 pub type Message {
   GetTemperature(request_id: Int, reply_to: ActorRef(TemperatureReading))
@@ -27,4 +28,8 @@ fn do_worker(last_reading: Temperature) -> Behavior(Message) {
       do_worker(Ok(temperature))
     }
   }
+}
+
+pub fn child_spec() -> supervisor.Child(ActorRef(Message)) {
+  supervisor.worker_child("group_worker", worker())
 }

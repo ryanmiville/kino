@@ -1,6 +1,7 @@
 import gleam/dict.{type Dict}
 import iot/device
-import kino_old.{type ActorRef, type Behavior} as kino
+import kino.{type ActorRef, type Behavior}
+import kino/supervisor
 
 pub type Message {
   AddDevice(device_id: String)
@@ -25,7 +26,7 @@ fn do_worker(group_id: String, devices: Dict(String, ActorRef(device.Message))) 
           kino.continue
         }
         _ -> {
-          let device = kino.spawn_link(device.worker(), device_id)
+          let assert Ok(device) = kino.start_link(device.worker())
           do_worker(group_id, dict.insert(devices, device_id, device))
         }
       }
@@ -36,4 +37,8 @@ fn do_worker(group_id: String, devices: Dict(String, ActorRef(device.Message))) 
       kino.continue
     }
   }
+}
+
+pub fn child_spec(group_id: String) -> supervisor.Child(ActorRef(Message)) {
+  supervisor.worker_child("group_worker", worker(group_id))
 }
