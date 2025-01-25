@@ -1,7 +1,9 @@
 import gleam/dict.{type Dict}
 import iot/device
-import kino.{type ActorRef, type Behavior}
-import kino/supervisor
+import kino.{type ActorRef}
+
+// import kino/internal/supervisor
+import kino/supervisor.{type SupervisorRef}
 
 pub type Message {
   AddDevice(device_id: String)
@@ -12,12 +14,16 @@ pub type DeviceList {
   DeviceList(request_id: Int, ids: List(String))
 }
 
-pub fn worker(group_id: String) -> Behavior(Message) {
+pub fn worker(group_id: String, sup: SupervisorRef) -> kino.Spec(Message) {
   use _context <- kino.init()
-  do_worker(group_id, dict.new())
+  do_worker(group_id, sup, dict.new())
 }
 
-fn do_worker(group_id: String, devices: Dict(String, ActorRef(device.Message))) {
+fn do_worker(
+  group_id: String,
+  sup: SupervisorRef,
+  devices: Dict(String, ActorRef(device.Message)),
+) {
   use _context, message <- kino.receive()
   case message {
     AddDevice(device_id) -> {
@@ -26,8 +32,9 @@ fn do_worker(group_id: String, devices: Dict(String, ActorRef(device.Message))) 
           kino.continue
         }
         _ -> {
-          let assert Ok(device) = kino.start_link(device.worker())
-          do_worker(group_id, dict.insert(devices, device_id, device))
+          let assert Ok(device) =
+            supervisor.start_worker_child(sup, device.child_spec(device_id))
+          do_worker(group_id, sup, dict.insert(devices, device_id, device))
         }
       }
     }
@@ -39,6 +46,9 @@ fn do_worker(group_id: String, devices: Dict(String, ActorRef(device.Message))) 
   }
 }
 
-pub fn child_spec(group_id: String) -> supervisor.Child(ActorRef(Message)) {
-  supervisor.worker_child("group_worker", worker(group_id))
+pub fn child_spec(
+  group_id: String,
+  sup: SupervisorRef,
+) -> supervisor.Child(ActorRef(Message)) {
+  supervisor.worker_child("group_worker", worker(group_id, sup))
 }

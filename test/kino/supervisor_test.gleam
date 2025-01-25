@@ -51,7 +51,7 @@ pub type Message(element) {
   Pop(reply_to: Subject(Result(element, Nil)))
 }
 
-pub fn new_stack_server(subject) -> Behavior(Message(element)) {
+pub fn new_stack_server(subject) -> kino.Spec(Message(element)) {
   use context <- kino.init()
   process.send(subject, kino.self(context))
   stack_server([])

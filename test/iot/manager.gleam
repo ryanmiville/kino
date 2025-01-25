@@ -44,17 +44,7 @@ fn do_worker(
         }
         _ -> {
           let assert Ok(group) =
-            supervisor.start_worker_child(sup, group.child_spec(group_id))
-          // let asdf =
-          //   supervisor.start_child(
-          //     sup,
-          //     supervisor.worker_child(
-          //       "group_worker",
-          //       "group_worker-" <> group_id,
-          //       group.worker(group_id),
-          //     ),
-          //   )
-          let assert Ok(group) = kino.start_link(group.worker(group_id))
+            supervisor.start_worker_child(sup, group.child_spec(group_id, sup))
           kino.send(group, group.AddDevice(device_id))
           do_worker(sup, dict.insert(groups, group_id, group))
         }

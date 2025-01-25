@@ -13,8 +13,8 @@ pub type TemperatureReading {
 pub type Temperature =
   Result(Float, Nil)
 
-pub fn worker() -> Behavior(Message) {
-  do_worker(Error(Nil))
+pub fn worker() -> kino.Spec(Message) {
+  do_worker(Error(Nil)) |> kino.new_spec
 }
 
 fn do_worker(last_reading: Temperature) -> Behavior(Message) {
@@ -30,6 +30,6 @@ fn do_worker(last_reading: Temperature) -> Behavior(Message) {
   }
 }
 
-pub fn child_spec() -> supervisor.Child(ActorRef(Message)) {
-  supervisor.worker_child("group_worker", worker())
+pub fn child_spec(device_id: String) -> supervisor.Child(ActorRef(Message)) {
+  supervisor.worker_child(device_id, worker())
 }

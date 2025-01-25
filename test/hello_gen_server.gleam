@@ -43,15 +43,15 @@ fn do_bot(count: Int, max: Int) -> Behavior(Greeted) {
   do_bot(count, max)
 }
 
-pub fn app() -> Behavior(SayHello) {
+pub fn app() -> kino.Spec(SayHello) {
   use _context <- kino.init()
-  let assert Ok(greeter) = kino.start_link(greeter())
+  let assert Ok(greeter) = kino.start_link(kino.new_spec(greeter()))
   do_app(greeter)
 }
 
 fn do_app(greeter: ActorRef(Greet)) -> Behavior(SayHello) {
   use _context, SayHello(name) <- kino.receive()
-  let assert Ok(bot) = kino.start_link(bot(3))
+  let assert Ok(bot) = kino.start_link(bot(3) |> kino.new_spec)
   kino.send(greeter, Greet(name, bot))
   kino.continue
 }

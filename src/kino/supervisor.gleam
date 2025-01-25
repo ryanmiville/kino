@@ -1,7 +1,7 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Pid}
 import gleam/result
-import kino.{type ActorRef, type Behavior}
+import kino.{type ActorRef}
 import kino/internal/gen_server
 import kino/internal/supervisor as sup
 
@@ -44,9 +44,9 @@ pub fn add(supervisor: Supervisor, child: Child(a)) -> Supervisor {
   |> Supervisor
 }
 
-pub fn worker_child(id: String, behavior: Behavior(a)) -> Child(ActorRef(a)) {
+pub fn worker_child(id: String, child: kino.Spec(a)) -> Child(ActorRef(a)) {
   sup.worker_child(id, fn() {
-    kino.start_link(behavior)
+    kino.start_link(child)
     |> result.map(kino.owner)
   })
   |> Child

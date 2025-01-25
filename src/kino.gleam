@@ -110,14 +110,17 @@ pub fn self(context: Context(message)) -> ActorRef(message) {
   context.self
 }
 
+pub opaque type Spec(message) {
+  Spec(init: fn(Context(message)) -> Behavior(message))
+}
+
 pub opaque type Behavior(message) {
   Receive(on_receive: fn(Context(message), message) -> Behavior(message))
-  Init(on_init: fn(Context(message)) -> Behavior(message))
   Continue
   Stop
 }
 
-pub const init = Init
+pub const init = Spec
 
 pub const receive = Receive
 
@@ -125,10 +128,8 @@ pub const continue: Behavior(message) = Continue
 
 pub const stopped: Behavior(message) = Stop
 
-pub fn start_link(
-  behavior: Behavior(message),
-) -> Result(ActorRef(message), Dynamic) {
-  let spec = new_spec(behavior)
+pub fn start_link(spec: Spec(message)) -> Result(ActorRef(message), Dynamic) {
+  let spec = new_gen_server_spec(spec)
   let ref = gen_server.start_link(spec, Nil)
   result.map(ref, ActorRef)
 }
@@ -137,29 +138,22 @@ type State(message) {
   State(context: Context(message), behavior: Behavior(message))
 }
 
-fn new_spec(
-  behavior: Behavior(message),
-) -> gen_server.Spec(init_args, message, Behavior(message), State(message)) {
+fn new_gen_server_spec(spec: Spec(message)) {
   gen_server.Spec(
     init: fn(_) {
-      case behavior {
-        Init(on_init) -> {
-          let context = new_context()
-          let next = on_init(context)
-          let state = State(context, next)
-          Ok(state)
-        }
-        _ -> {
-          let context = new_context()
-          let state = State(context, behavior)
-          Ok(state)
-        }
-      }
+      let context = new_context()
+      let next = spec.init(context)
+      let state = State(context, next)
+      Ok(state)
     },
     handle_call:,
     handle_cast:,
     terminate:,
   )
+}
+
+pub fn new_spec(behavior: Behavior(message)) -> Spec(message) {
+  Spec(init: fn(_) { behavior })
 }
 
 fn new_context() -> Context(message) {
@@ -186,11 +180,6 @@ fn handle_cast(message: message, state: State(message)) {
         Continue -> gen_server.Noreply(state)
         next -> gen_server.Noreply(State(context, next))
       }
-    }
-    Init(on_init) -> {
-      let next = on_init(context)
-      let state = State(context, next)
-      gen_server.Noreply(state)
     }
     Continue -> gen_server.Noreply(state)
     Stop -> gen_server.Stop(process.Normal, state)
