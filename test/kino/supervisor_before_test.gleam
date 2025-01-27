@@ -1,9 +1,11 @@
 import gleam/erlang/process.{type Subject}
-import kino.{type ActorRef, type Behavior, type Spec, type SupervisorRef}
+import kino/internal/supervisor as internal
+import kino/supervisor_before as supervisor
+import kino_before.{type Behavior} as kino
 
-pub fn supervisor_test() {
+pub fn supervisor_before_test() {
   let self = process.new_subject()
-  let assert Ok(sup) = kino.start_link(sup(self))
+  let sup = supervisor.start_link(sup(self))
 
   let assert Ok(first_stack) = process.receive(self, 10)
   kino.send(first_stack, Push("first - hello"))
@@ -11,7 +13,7 @@ pub fn supervisor_test() {
   let assert Ok("first - world") = kino.call(first_stack, Pop, 10)
 
   let assert Ok(second_stack) =
-    kino.start_worker_child(sup, "stack-2", new_stack_server(self))
+    supervisor.start_worker_child(sup, worker_spec("2", new_stack_server(self)))
 
   kino.send(second_stack, Push("second - hello"))
 
@@ -31,11 +33,16 @@ pub fn supervisor_test() {
   let assert Ok("restarted - hello") = kino.call(restarted, Pop, 10)
 }
 
-fn sup(subject) -> Spec(SupervisorRef) {
-  use _ <- kino.supervisor
+fn sup(subject) {
+  use _ref <- supervisor.init
 
-  let worker = kino.worker_child("stack-1", new_stack_server(subject))
-  [worker]
+  let worker = new_stack_server(subject)
+  supervisor.new(internal.OneForOne)
+  |> supervisor.add(worker_spec("1", worker))
+}
+
+fn worker_spec(id: String, worker) {
+  supervisor.worker_child("stack-" <> id, worker)
 }
 
 pub type Message(element) {
@@ -44,8 +51,8 @@ pub type Message(element) {
   Pop(reply_to: Subject(Result(element, Nil)))
 }
 
-pub fn new_stack_server(subject) -> Spec(ActorRef(Message(element))) {
-  use context <- kino.actor()
+pub fn new_stack_server(subject) -> kino.Spec(Message(element)) {
+  use context <- kino.init()
   process.send(subject, kino.self(context))
   stack_server([])
 }

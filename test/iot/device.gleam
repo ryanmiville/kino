@@ -1,5 +1,5 @@
-import kino.{type ActorRef, type Behavior}
-import kino/supervisor
+import kino/supervisor_before as supervisor
+import kino_before.{type ActorRef, type Behavior} as kino
 
 pub type Message {
   GetTemperature(request_id: Int, reply_to: ActorRef(TemperatureReading))

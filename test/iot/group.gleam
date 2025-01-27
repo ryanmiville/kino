@@ -1,9 +1,9 @@
 import gleam/dict.{type Dict}
 import iot/device
-import kino.{type ActorRef}
+import kino_before.{type ActorRef} as kino
 
 // import kino/internal/supervisor
-import kino/supervisor.{type SupervisorRef}
+import kino/supervisor_before.{type SupervisorRef} as supervisor
 
 pub type Message {
   AddDevice(device_id: String)

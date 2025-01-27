@@ -16,14 +16,16 @@ pub type SayHello {
   SayHello(name: String)
 }
 
-pub fn greeter() -> Behavior(Greet) {
+pub fn greeter() -> kino.Spec(ActorRef(Greet)) {
+  use _ <- kino.actor()
   use context, Greet(whom, reply_to) <- kino.receive()
   logging.log(logging.Info, "Hello, " <> whom <> "!")
   kino.send(reply_to, Greeted(whom, kino.self(context)))
   kino.continue
 }
 
-pub fn bot(max: Int) -> Behavior(Greeted) {
+pub fn bot(max: Int) -> kino.Spec(ActorRef(Greeted)) {
+  use _ <- kino.actor()
   do_bot(0, max)
 }
 
@@ -43,15 +45,15 @@ fn do_bot(count: Int, max: Int) -> Behavior(Greeted) {
   do_bot(count, max)
 }
 
-pub fn app() -> kino.Spec(SayHello) {
-  use _context <- kino.init()
-  let assert Ok(greeter) = kino.start_link(kino.new_spec(greeter()))
+pub fn app() -> kino.Spec(ActorRef(SayHello)) {
+  use _context <- kino.actor()
+  let assert Ok(greeter) = kino.start_link(greeter())
   do_app(greeter)
 }
 
 fn do_app(greeter: ActorRef(Greet)) -> Behavior(SayHello) {
   use _context, SayHello(name) <- kino.receive()
-  let assert Ok(bot) = kino.start_link(bot(3) |> kino.new_spec)
+  let assert Ok(bot) = kino.start_link(bot(3))
   kino.send(greeter, Greet(name, bot))
   kino.continue
 }

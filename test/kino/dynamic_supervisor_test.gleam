@@ -1,17 +1,18 @@
 import gleam/erlang/process.{type Subject}
-import kino.{type ActorRef, type Behavior, type Spec, type SupervisorRef}
+import kino.{type ActorRef, type Behavior, type DynamicSupervisorRef, type Spec}
 
-pub fn supervisor_test() {
+pub fn dynamic_supervisor_test() {
   let self = process.new_subject()
-  let assert Ok(sup) = kino.start_link(sup(self))
+  let assert Ok(sup) = kino.start_link(dyn_sup())
 
-  let assert Ok(first_stack) = process.receive(self, 10)
+  let assert Ok(first_stack) = kino.start_dynamic_worker_child(sup, self)
+  let assert Ok(_) = process.receive(self, 10)
   kino.send(first_stack, Push("first - hello"))
   kino.send(first_stack, Push("first - world"))
   let assert Ok("first - world") = kino.call(first_stack, Pop, 10)
 
-  let assert Ok(second_stack) =
-    kino.start_worker_child(sup, "stack-2", new_stack_server(self))
+  let assert Ok(second_stack) = kino.start_dynamic_worker_child(sup, self)
+  let assert Ok(_) = process.receive(self, 10)
 
   kino.send(second_stack, Push("second - hello"))
 
@@ -31,11 +32,11 @@ pub fn supervisor_test() {
   let assert Ok("restarted - hello") = kino.call(restarted, Pop, 10)
 }
 
-fn sup(subject) -> Spec(SupervisorRef) {
-  use _ <- kino.supervisor
-
-  let worker = kino.worker_child("stack-1", new_stack_server(subject))
-  [worker]
+fn dyn_sup() -> Spec(
+  DynamicSupervisorRef(Subject(ActorRef(Message(a))), ActorRef(Message(a))),
+) {
+  use _ <- kino.dynamic_supervisor
+  kino.dynamic_worker_child(new_stack_server)
 }
 
 pub type Message(element) {

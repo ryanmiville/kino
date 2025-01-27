@@ -176,6 +176,16 @@ pub fn owner(supervisor: DynamicSupervisor(args)) -> Pid {
   supervisor.pid
 }
 
+// TODO this is a hack
+pub fn self() -> DynamicSupervisor(args) {
+  DynamicSupervisor(process.self())
+}
+
+// TODO this is a hack
+pub fn from_pid(pid: Pid) -> DynamicSupervisor(args) {
+  DynamicSupervisor(pid)
+}
+
 pub fn start_link(
   builder: Builder(args),
 ) -> Result(DynamicSupervisor(args), Dynamic) {
@@ -188,7 +198,7 @@ pub fn start_link(
 
   let child = convert_child(builder.child)
 
-  let module = atom.create_from_string("dynamic_supervisor")
+  let module = atom.create_from_string("kino@internal@dynamic_supervisor")
 
   erlang_start_link(module, #(flags, [child]))
   |> result.map(DynamicSupervisor)

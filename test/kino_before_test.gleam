@@ -1,25 +1,20 @@
 import gleam/erlang/process.{type Subject}
-import gleeunit
-import kino.{type ActorRef, type Behavior, type Spec}
-
-pub fn main() {
-  gleeunit.main()
-}
+import kino_before.{type Behavior} as kino
 
 pub fn example_test() {
-  let assert Ok(stack) = start_link()
-  kino.send(stack, Push("Joe"))
-  kino.send(stack, Push("Mike"))
-  kino.send(stack, Push("Robert"))
+  let assert Ok(srv) = start_link()
+  kino.send(srv, Push("Joe"))
+  kino.send(srv, Push("Mike"))
+  kino.send(srv, Push("Robert"))
 
-  let assert Ok(Ok("Robert")) = kino.try_call(stack, Pop, 10)
-  let assert Ok(Ok("Mike")) = kino.try_call(stack, Pop, 10)
-  let assert Ok(Ok("Joe")) = kino.try_call(stack, Pop, 10)
+  let assert Ok(Ok("Robert")) = kino.try_call(srv, Pop, 10)
+  let assert Ok(Ok("Mike")) = kino.try_call(srv, Pop, 10)
+  let assert Ok(Ok("Joe")) = kino.try_call(srv, Pop, 10)
 
   // The stack is now empty, so if we pop again the actor replies with an error.
-  let assert Ok(Error(Nil)) = kino.try_call(stack, Pop, 10)
+  let assert Ok(Error(Nil)) = kino.try_call(srv, Pop, 10)
   // Lastly, we can send a message to the actor asking it to shut down.
-  kino.send(stack, Shutdown)
+  kino.send(srv, Shutdown)
 }
 
 pub type Message(element) {
@@ -31,8 +26,8 @@ pub type Message(element) {
   Pop(reply_to: Subject(Result(element, Nil)))
 }
 
-pub fn new_stack_server() -> Spec(ActorRef(Message(element))) {
-  use _context <- kino.actor()
+pub fn new_stack_server() -> kino.Spec(Message(element)) {
+  use _context <- kino.init()
   stack_server([])
 }
 
