@@ -1,41 +1,46 @@
 import gleam/erlang/process.{type Subject}
-import kino.{type ActorRef, type Behavior, type Spec, type SupervisorRef}
+import kino/actor.{type Behavior}
+import kino/supervisor
 
 pub fn supervisor_test() {
   let self = process.new_subject()
-  let assert Ok(sup) = kino.start_link(sup(self))
+  let assert Ok(sup) = supervisor.start_link(sup(self))
 
   let assert Ok(first_stack) = process.receive(self, 10)
-  kino.send(first_stack, Push("first - hello"))
-  kino.send(first_stack, Push("first - world"))
-  let assert Ok("first - world") = kino.call(first_stack, Pop, 10)
+  actor.send(first_stack, Push("first - hello"))
+  actor.send(first_stack, Push("first - world"))
+  let assert Ok("first - world") = actor.call(first_stack, Pop, 10)
 
   let assert Ok(second_stack) =
-    kino.start_worker_child(sup, "stack-2", new_stack_server(self))
+    supervisor.start_child(
+      sup,
+      actor.static_child("stack-2", new_stack_server(self)),
+    )
 
-  kino.send(second_stack, Push("second - hello"))
+  actor.send(second_stack, Push("second - hello"))
 
-  let assert Ok("first - hello") = kino.call(first_stack, Pop, 10)
-  let assert Ok("second - hello") = kino.call(second_stack, Pop, 10)
+  let assert Ok("first - hello") = actor.call(first_stack, Pop, 10)
+  let assert Ok("second - hello") = actor.call(second_stack, Pop, 10)
 
-  let assert Error(Nil) = kino.call(first_stack, Pop, 10)
-  let assert Error(Nil) = kino.call(second_stack, Pop, 10)
+  let assert Error(Nil) = actor.call(first_stack, Pop, 10)
+  let assert Error(Nil) = actor.call(second_stack, Pop, 10)
 
-  kino.send(first_stack, Push("first - will lose"))
-  kino.send(first_stack, Shutdown)
+  actor.send(first_stack, Push("first - will lose"))
+  actor.send(first_stack, Shutdown)
 
-  let assert Error(process.CalleeDown(_)) = kino.try_call(first_stack, Pop, 10)
+  let assert Error(process.CalleeDown(_)) = actor.try_call(first_stack, Pop, 10)
 
   let assert Ok(restarted) = process.receive(self, 10)
-  kino.send(restarted, Push("restarted - hello"))
-  let assert Ok("restarted - hello") = kino.call(restarted, Pop, 10)
+  actor.send(restarted, Push("restarted - hello"))
+  let assert Ok("restarted - hello") = actor.call(restarted, Pop, 10)
 }
 
-fn sup(subject) -> Spec(SupervisorRef) {
-  use _ <- kino.supervisor
+fn sup(subject) -> supervisor.Spec {
+  use _ <- supervisor.init()
 
-  let worker = kino.worker_child("stack-1", new_stack_server(subject))
-  [worker]
+  let worker = actor.static_child("stack-1", new_stack_server(subject))
+
+  supervisor.new() |> supervisor.add_child(worker)
 }
 
 pub type Message(element) {
@@ -44,14 +49,14 @@ pub type Message(element) {
   Pop(reply_to: Subject(Result(element, Nil)))
 }
 
-pub fn new_stack_server(subject) -> Spec(ActorRef(Message(element))) {
-  use context <- kino.actor()
-  process.send(subject, kino.self(context))
+pub fn new_stack_server(subject) -> actor.Spec(Message(element)) {
+  use self <- actor.init()
+  process.send(subject, self)
   stack_server([])
 }
 
 fn stack_server(stack: List(element)) -> Behavior(Message(element)) {
-  use _context, message <- kino.receive()
+  use _, message <- actor.receive()
   case message {
     Push(value) -> {
       let new_stack = [value, ..stack]
@@ -73,7 +78,7 @@ fn stack_server(stack: List(element)) -> Behavior(Message(element)) {
     }
 
     Shutdown -> {
-      kino.stopped
+      actor.stopped
     }
   }
 }

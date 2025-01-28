@@ -1,42 +1,42 @@
 import gleam/erlang/process.{type Subject}
-import kino.{type ActorRef, type Behavior, type DynamicSupervisorRef, type Spec}
+import kino/actor.{type ActorRef, type Behavior}
+import kino/sofo
 
-pub fn dynamic_supervisor_test() {
+pub fn worker_child_test() {
   let self = process.new_subject()
-  let assert Ok(sup) = kino.start_link(dyn_sup())
+  let assert Ok(sup) = sofo.start_link(dynamic_supervisor())
 
-  let assert Ok(first_stack) = kino.start_dynamic_worker_child(sup, self)
+  let child_spec = new_stack_server(self) |> actor.dynamic_child
+  let assert Ok(first_stack) = sofo.start_child(sup, child_spec)
   let assert Ok(_) = process.receive(self, 10)
-  kino.send(first_stack, Push("first - hello"))
-  kino.send(first_stack, Push("first - world"))
-  let assert Ok("first - world") = kino.call(first_stack, Pop, 10)
+  actor.send(first_stack, Push("first - hello"))
+  actor.send(first_stack, Push("first - world"))
+  let assert Ok("first - world") = actor.call(first_stack, Pop, 10)
 
-  let assert Ok(second_stack) = kino.start_dynamic_worker_child(sup, self)
+  let assert Ok(second_stack) = sofo.start_child(sup, child_spec)
   let assert Ok(_) = process.receive(self, 10)
 
-  kino.send(second_stack, Push("second - hello"))
+  actor.send(second_stack, Push("second - hello"))
 
-  let assert Ok("first - hello") = kino.call(first_stack, Pop, 10)
-  let assert Ok("second - hello") = kino.call(second_stack, Pop, 10)
+  let assert Ok("first - hello") = actor.call(first_stack, Pop, 10)
+  let assert Ok("second - hello") = actor.call(second_stack, Pop, 10)
 
-  let assert Error(Nil) = kino.call(first_stack, Pop, 10)
-  let assert Error(Nil) = kino.call(second_stack, Pop, 10)
+  let assert Error(Nil) = actor.call(first_stack, Pop, 10)
+  let assert Error(Nil) = actor.call(second_stack, Pop, 10)
 
-  kino.send(first_stack, Push("first - will lose"))
-  kino.send(first_stack, Shutdown)
+  actor.send(first_stack, Push("first - will lose"))
+  actor.send(first_stack, Shutdown)
 
-  let assert Error(process.CalleeDown(_)) = kino.try_call(first_stack, Pop, 10)
+  let assert Error(process.CalleeDown(_)) = actor.try_call(first_stack, Pop, 10)
 
   let assert Ok(restarted) = process.receive(self, 10)
-  kino.send(restarted, Push("restarted - hello"))
-  let assert Ok("restarted - hello") = kino.call(restarted, Pop, 10)
+  actor.send(restarted, Push("restarted - hello"))
+  let assert Ok("restarted - hello") = actor.call(restarted, Pop, 10)
 }
 
-fn dyn_sup() -> Spec(
-  DynamicSupervisorRef(Subject(ActorRef(Message(a))), ActorRef(Message(a))),
-) {
-  use _ <- kino.dynamic_supervisor
-  kino.dynamic_worker_child(new_stack_server)
+fn dynamic_supervisor() -> sofo.Spec(ActorRef(a)) {
+  use _ <- sofo.init()
+  sofo.worker_children(actor.owner)
 }
 
 pub type Message(element) {
@@ -45,14 +45,14 @@ pub type Message(element) {
   Pop(reply_to: Subject(Result(element, Nil)))
 }
 
-pub fn new_stack_server(subject) -> Spec(ActorRef(Message(element))) {
-  use context <- kino.actor()
-  process.send(subject, kino.self(context))
+pub fn new_stack_server(subject) -> actor.Spec(Message(element)) {
+  use self <- actor.init()
+  process.send(subject, self)
   stack_server([])
 }
 
 fn stack_server(stack: List(element)) -> Behavior(Message(element)) {
-  use _context, message <- kino.receive()
+  use _, message <- actor.receive()
   case message {
     Push(value) -> {
       let new_stack = [value, ..stack]
@@ -74,7 +74,7 @@ fn stack_server(stack: List(element)) -> Behavior(Message(element)) {
     }
 
     Shutdown -> {
-      kino.stopped
+      actor.stopped
     }
   }
 }

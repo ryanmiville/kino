@@ -62,7 +62,7 @@ fn do_worker(
         }
       }
     }
-    GroupTerminated(group_id:) -> todo
+    GroupTerminated(_group_id) -> todo
     Shutdown -> todo
   }
   kino.continue

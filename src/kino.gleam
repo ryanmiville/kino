@@ -6,7 +6,7 @@ import kino/internal/dynamic_supervisor as dyn
 import kino/internal/gen_server
 import kino/internal/supervisor as sup
 
-pub opaque type Spec(ref) {
+pub type Spec(ref) {
   Spec(init: fn() -> Result(ref, Dynamic))
 }
 
