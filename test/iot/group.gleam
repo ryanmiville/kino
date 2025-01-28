@@ -1,54 +1,73 @@
 import gleam/dict.{type Dict}
+import gleam/erlang/process
 import iot/device
-import kino_before.{type ActorRef} as kino
+import iot/messages.{AddDevice, DeviceList, GetDeviceList, StartDeviceSupervisor}
+import kino/actor.{type ActorRef, type Behavior}
+import kino/child.{type StaticChild, StaticChild}
+import kino/dynamic_supervisor.{type DynamicSupervisorRef}
+import kino/supervisor.{type SupervisorRef}
 
-// import kino/internal/supervisor
-import kino/supervisor_before.{type SupervisorRef} as supervisor
+pub type Message =
+  messages.Group
 
-pub type Message {
-  AddDevice(device_id: String)
-  GetDeviceList(request_id: Int, reply_to: ActorRef(DeviceList))
+pub fn supervisor(reply_to) {
+  use self <- supervisor.init()
+  let child = actor.static_child("group_worker", worker(self, reply_to))
+  supervisor.new() |> supervisor.add_child(child)
 }
 
-pub type DeviceList {
-  DeviceList(request_id: Int, ids: List(String))
+pub fn worker(sup: SupervisorRef, reply_to) -> actor.Spec(Message) {
+  use self <- actor.init()
+  actor.send(self, StartDeviceSupervisor)
+  start_worker(sup, reply_to)
 }
 
-pub fn worker(group_id: String, sup: SupervisorRef) -> kino.Spec(Message) {
-  use _context <- kino.init()
-  do_worker(group_id, sup, dict.new())
+fn start_worker(sup: SupervisorRef, reply_to) -> Behavior(Message) {
+  use self, message <- actor.receive()
+  case message {
+    StartDeviceSupervisor -> {
+      let assert Ok(device_sup) =
+        supervisor.start_child(
+          sup,
+          device.supervisor_child_spec("device_supervisor"),
+        )
+      process.send(reply_to, self)
+      do_worker(device_sup, dict.new())
+    }
+    _ -> panic as "actor is not ready"
+  }
 }
 
 fn do_worker(
-  group_id: String,
-  sup: SupervisorRef,
+  device_sup: DynamicSupervisorRef(ActorRef(device.Message)),
   devices: Dict(String, ActorRef(device.Message)),
-) {
-  use _context, message <- kino.receive()
+) -> Behavior(Message) {
+  use _, message <- actor.receive()
   case message {
     AddDevice(device_id) -> {
       case dict.get(devices, device_id) {
         Ok(_) -> {
-          kino.continue
+          actor.continue
         }
         _ -> {
           let assert Ok(device) =
-            supervisor.start_worker_child(sup, device.child_spec(device_id))
-          do_worker(group_id, sup, dict.insert(devices, device_id, device))
+            dynamic_supervisor.start_child(
+              device_sup,
+              device.worker_child_spec(),
+            )
+          do_worker(device_sup, dict.insert(devices, device_id, device))
         }
       }
     }
     GetDeviceList(request_id:, reply_to:) -> {
       let ids = dict.keys(devices)
-      kino.send(reply_to, DeviceList(request_id, ids))
-      kino.continue
+      actor.send(reply_to, DeviceList(request_id, ids))
+      actor.continue
     }
+    StartDeviceSupervisor -> actor.continue
   }
 }
 
-pub fn child_spec(
-  group_id: String,
-  sup: SupervisorRef,
-) -> supervisor.Child(ActorRef(Message)) {
-  supervisor.worker_child("group_worker", worker(group_id, sup))
+pub fn child_spec(group_id: String, reply_to) -> StaticChild(SupervisorRef) {
+  supervisor.static_child(group_id, supervisor(reply_to))
 }

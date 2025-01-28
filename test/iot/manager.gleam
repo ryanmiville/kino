@@ -1,32 +1,23 @@
 import gleam/dict.{type Dict}
+import gleam/erlang/process
 import iot/group
-import kino/internal/supervisor as internal
-import kino/supervisor_before.{type SupervisorRef} as supervisor
-import kino_before.{type ActorRef, type Behavior} as kino
-
-pub type Message {
-  AddDevice(group_id: String, device_id: String)
-  GetDeviceList(
-    request_id: Int,
-    group_id: String,
-    reply_to: ActorRef(DeviceList),
-  )
-  GroupTerminated(group_id: String)
-  Shutdown
+import iot/messages.{
+  AddGroupDevice, GetGroupDeviceList, GroupAdded, GroupTerminated, Shutdown,
 }
+import kino/actor.{type ActorRef, type Behavior}
+import kino/supervisor.{type SupervisorRef}
 
-pub type DeviceList =
-  group.DeviceList
+pub type Message =
+  messages.Manager
 
 pub fn supervisor() {
-  use sup <- supervisor.init()
-
-  supervisor.new(internal.OneForAll)
-  |> supervisor.add(child_spec(sup))
+  use self <- supervisor.init()
+  let child = actor.static_child("manager_worker", worker(self))
+  supervisor.new() |> supervisor.add_child(child)
 }
 
 fn worker(sup: SupervisorRef) {
-  use _context <- kino.init()
+  use _ <- actor.init()
   do_worker(sup, dict.new())
 }
 
@@ -34,40 +25,42 @@ fn do_worker(
   sup: SupervisorRef,
   groups: Dict(String, ActorRef(group.Message)),
 ) -> Behavior(Message) {
-  use _context, message <- kino.receive()
+  use _, message <- actor.receive()
   case message {
-    AddDevice(group_id:, device_id:) -> {
+    AddGroupDevice(group_id:, device_id:) -> {
       case dict.get(groups, group_id) {
         Ok(group) -> {
-          kino.send(group, group.AddDevice(device_id))
-          kino.continue
+          actor.send(group, messages.AddDevice(device_id))
+          actor.continue
         }
         _ -> {
-          let assert Ok(group) =
-            supervisor.start_worker_child(sup, group.child_spec(group_id, sup))
-          kino.send(group, group.AddDevice(device_id))
+          let self = process.new_subject()
+          let assert Ok(_) =
+            supervisor.start_child(sup, group.child_spec(group_id, self))
+          let assert Ok(group) = process.receive(self, 5000)
+          actor.send(group, messages.AddDevice(device_id))
           do_worker(sup, dict.insert(groups, group_id, group))
         }
       }
     }
-    GetDeviceList(request_id:, group_id:, reply_to:) -> {
+    GetGroupDeviceList(request_id:, group_id:, reply_to:) -> {
       case dict.get(groups, group_id) {
         Ok(group) -> {
-          kino.send(group, group.GetDeviceList(request_id, reply_to))
-          kino.continue
+          actor.send(group, messages.GetDeviceList(request_id, reply_to))
+          actor.continue
         }
         _ -> {
-          kino.send(reply_to, group.DeviceList(request_id, []))
-          kino.continue
+          actor.send(reply_to, messages.DeviceList(request_id, []))
+          actor.continue
         }
       }
     }
-    GroupTerminated(_group_id) -> todo
-    Shutdown -> todo
+    GroupAdded(group_id:, group:) -> {
+      do_worker(sup, dict.insert(groups, group_id, group))
+    }
+    GroupTerminated(group_id:) -> {
+      do_worker(sup, dict.delete(groups, group_id))
+    }
+    Shutdown -> actor.stopped
   }
-  kino.continue
-}
-
-fn child_spec(sup: SupervisorRef) -> supervisor.Child(ActorRef(Message)) {
-  supervisor.worker_child("manager_worker", worker(sup))
 }

@@ -124,9 +124,9 @@ pub fn handle_cast(
 @internal
 pub fn handle_info(
   _request: request,
-  _state: State(init_args, request, reply, state),
+  state: State(init_args, request, reply, state),
 ) -> Dynamic {
-  panic as "should not be called"
+  dynamic.from(Noreply(state))
 }
 
 @internal
