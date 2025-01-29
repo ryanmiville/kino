@@ -2,8 +2,6 @@ import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Pid}
 import gleam/result
 import kino
-import kino/child.{type Child, Child}
-
 import kino/internal/supervisor
 
 pub opaque type SupervisorRef {
@@ -13,16 +11,12 @@ pub opaque type SupervisorRef {
 pub type Spec =
   kino.Spec(SupervisorRef)
 
-// pub opaque type Spec {
-//   Spec(init: fn() -> Result(SupervisorRef, Dynamic))
-// }
-
-// pub type Child(ref) {
-//   Child(builder: supervisor.ChildBuilder, transform: fn(Pid) -> ref)
-// }
-
 pub type Supervisor {
   Supervisor(builder: supervisor.Builder)
+}
+
+pub opaque type Child(returning) {
+  Child(builder: supervisor.ChildBuilder(returning))
 }
 
 pub fn owner(supervisor: SupervisorRef) -> Pid {
@@ -45,7 +39,7 @@ pub fn init(init: fn(SupervisorRef) -> Supervisor) -> Spec {
 }
 
 pub fn start_link(spec: Spec) -> Result(SupervisorRef, Dynamic) {
-  spec.init()
+  kino.start_link(spec)
 }
 
 type SupervisorSpec {
@@ -56,8 +50,11 @@ fn supervisor_spec_to_spec(in: SupervisorSpec) -> Spec {
   kino.Spec(fn() { supervisor_start_link(in) })
 }
 
-fn supervisor_start_link(spec: SupervisorSpec) -> Result(SupervisorRef, Dynamic) {
-  supervisor.start_link(spec.init) |> result.map(SupervisorRef)
+fn supervisor_start_link(
+  spec: SupervisorSpec,
+) -> Result(#(Pid, SupervisorRef), Dynamic) {
+  supervisor.start_link(spec.init)
+  |> result.map(fn(pid) { #(pid, SupervisorRef(pid)) })
 }
 
 pub fn start_child(
@@ -68,11 +65,13 @@ pub fn start_child(
   ref
 }
 
-pub fn child_spec(id: String, child: Spec) -> Child(SupervisorRef) {
-  let start = fn() {
-    use ref <- result.map(child.init())
-    #(ref.pid, ref)
-  }
-  supervisor.supervisor_child(id, start)
-  |> Child
+pub fn worker_child(id: String, child: kino.Spec(returning)) -> Child(returning) {
+  supervisor.worker_child(id, child.init) |> Child
+}
+
+pub fn supervisor_child(
+  id: String,
+  child: kino.Spec(returning),
+) -> Child(returning) {
+  supervisor.supervisor_child(id, child.init) |> Child
 }

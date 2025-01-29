@@ -25,7 +25,7 @@ pub fn init(
     init(DynamicSupervisorRef(process.self())).builder
     |> dyn.start_link
     |> result.map(dyn.owner)
-    |> result.map(DynamicSupervisorRef)
+    |> result.map(fn(pid) { #(pid, DynamicSupervisorRef(pid)) })
   }
   |> kino.Spec
 }
@@ -59,19 +59,17 @@ pub fn owner(supervisor: DynamicSupervisorRef(returning)) -> Pid {
   supervisor.pid
 }
 
-pub fn worker_children(owner: fn(returning) -> Pid) {
+pub fn worker_children() {
   dyn.worker_child("worker_child", fn(spec: kino.Spec(returning)) {
-    use ref <- result.map(kino.start_link(spec))
-    #(owner(ref), ref)
+    spec.init()
   })
   |> dyn.new
   |> DynamicSupervisor
 }
 
-pub fn supervisor_children(owner: fn(returning) -> Pid) {
+pub fn supervisor_children() {
   dyn.supervisor_child("supervisor_child", fn(spec: kino.Spec(returning)) {
-    use ref <- result.map(kino.start_link(spec))
-    #(owner(ref), ref)
+    spec.init()
   })
   |> dyn.new
   |> DynamicSupervisor

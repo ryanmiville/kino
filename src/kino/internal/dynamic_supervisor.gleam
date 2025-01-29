@@ -325,15 +325,6 @@ fn convert_child(child: ChildBuilder(args, info)) -> Dict(Atom, Dynamic) {
     [dynamic.from(f)],
   )
 
-  // pub fn dynamic_child(
-  //   starter: fn(init_arg) -> Spec(message),
-  // ) -> DynamicChild(init_arg, ActorRef(message)) {
-  //   let start = fn(arg) { starter(arg).init() |> result.map(owner) }
-
-  //   let child = dyn.worker_child("", start)
-  //   DynamicChild(child, fn(pid) { ActorRef(gen_server.from_pid(pid)) })
-  // }
-
   let #(type_, shutdown) = case child.child_type {
     Supervisor -> #(
       atom.create_from_string("supervisor"),

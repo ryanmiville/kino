@@ -12,7 +12,7 @@ pub type Message =
 
 pub fn supervisor() {
   use self <- supervisor.init()
-  let child = actor.child("manager_worker", worker(self))
+  let child = supervisor.worker_child("manager_worker", worker(self))
   supervisor.new() |> supervisor.add_child(child)
 }
 

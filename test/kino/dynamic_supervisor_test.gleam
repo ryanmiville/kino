@@ -1,19 +1,19 @@
 import gleam/erlang/process.{type Subject}
 import kino/actor.{type ActorRef, type Behavior}
-import kino/sofo
+import kino/dynamic_supervisor
 
 pub fn worker_child_test() {
   let self = process.new_subject()
-  let assert Ok(sup) = sofo.start_link(dynamic_supervisor())
+  let assert Ok(sup) = dynamic_supervisor.start_link(dynamic_supervisor())
 
   let child_spec = new_stack_server(self)
-  let assert Ok(first_stack) = sofo.start_child(sup, child_spec)
+  let assert Ok(first_stack) = dynamic_supervisor.start_child(sup, child_spec)
   let assert Ok(_) = process.receive(self, 10)
   actor.send(first_stack, Push("first - hello"))
   actor.send(first_stack, Push("first - world"))
   let assert Ok("first - world") = actor.call(first_stack, Pop, 10)
 
-  let assert Ok(second_stack) = sofo.start_child(sup, child_spec)
+  let assert Ok(second_stack) = dynamic_supervisor.start_child(sup, child_spec)
   let assert Ok(_) = process.receive(self, 10)
 
   actor.send(second_stack, Push("second - hello"))
@@ -34,9 +34,9 @@ pub fn worker_child_test() {
   let assert Ok("restarted - hello") = actor.call(restarted, Pop, 10)
 }
 
-fn dynamic_supervisor() -> sofo.Spec(ActorRef(a)) {
-  use _ <- sofo.init()
-  sofo.worker_children(actor.owner)
+fn dynamic_supervisor() -> dynamic_supervisor.Spec(ActorRef(a)) {
+  use _ <- dynamic_supervisor.init()
+  dynamic_supervisor.worker_children()
 }
 
 pub type Message(element) {

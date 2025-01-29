@@ -2,10 +2,8 @@ import gleam/erlang/process
 import gleeunit
 import gleeunit/should
 import iot/device
-import iot/group
 import iot/messages
 import kino/actor
-import kino/supervisor
 
 pub fn main() {
   gleeunit.main()

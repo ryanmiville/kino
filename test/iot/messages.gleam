@@ -1,7 +1,5 @@
 import kino/actor.{type ActorRef}
 
-import gleam/erlang/process.{type Subject}
-
 pub type Manager {
   AddGroupDevice(group_id: String, device_id: String)
   GetGroupDeviceList(

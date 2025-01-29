@@ -1,17 +1,16 @@
-import gleam/erlang/process
 import iot/messages.{
   type Temperature, GetTemperature, RecordTemperature, TemperatureReading,
 }
 import kino/actor.{type ActorRef, type Behavior}
-import kino/child.{type Child, Child}
 import kino/dynamic_supervisor.{type DynamicSupervisorRef}
+import kino/supervisor.{type Child}
 
 pub type Message =
   messages.Device
 
 pub fn supervisor() -> dynamic_supervisor.Spec(ActorRef(Message)) {
   use _ <- dynamic_supervisor.init()
-  dynamic_supervisor.worker_children(actor.owner)
+  dynamic_supervisor.worker_children()
 }
 
 pub fn worker() -> actor.Spec(Message) {
@@ -32,8 +31,6 @@ fn do_worker(last_reading: Temperature) -> Behavior(Message) {
   }
 }
 
-pub fn supervisor_child_spec(
-  id: String,
-) -> Child(DynamicSupervisorRef(ActorRef(Message))) {
-  dynamic_supervisor.child_spec(id, supervisor())
+pub fn child_spec(id: String) -> Child(DynamicSupervisorRef(ActorRef(Message))) {
+  supervisor.supervisor_child(id, supervisor())
 }

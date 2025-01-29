@@ -12,7 +12,10 @@ pub fn supervisor_test() {
   let assert Ok("first - world") = actor.call(first_stack, Pop, 10)
 
   let assert Ok(second_stack) =
-    supervisor.start_child(sup, actor.child("stack-2", new_stack_server(self)))
+    supervisor.start_child(
+      sup,
+      supervisor.worker_child("stack-2", new_stack_server(self)),
+    )
 
   actor.send(second_stack, Push("second - hello"))
 
@@ -35,7 +38,7 @@ pub fn supervisor_test() {
 fn sup(subject) -> supervisor.Spec {
   use _ <- supervisor.init()
 
-  let worker = actor.child("stack-1", new_stack_server(subject))
+  let worker = supervisor.worker_child("stack-1", new_stack_server(subject))
 
   supervisor.new() |> supervisor.add_child(worker)
 }
