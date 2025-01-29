@@ -35,5 +35,5 @@ fn do_worker(last_reading: Temperature) -> Behavior(Message) {
 pub fn supervisor_child_spec(
   id: String,
 ) -> Child(DynamicSupervisorRef(ActorRef(Message))) {
-  dynamic_supervisor.static_child(id, supervisor())
+  dynamic_supervisor.child_spec(id, supervisor())
 }

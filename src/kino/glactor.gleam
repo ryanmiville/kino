@@ -10,10 +10,6 @@ import kino/internal/supervisor as sup
 pub type Spec(message) =
   kino.Spec(ActorRef(message))
 
-// pub opaque type Spec(message) {
-//   Spec(init: fn() -> Result(ActorRef(message), Dynamic))
-// }
-
 pub opaque type ActorRef(message) {
   ActorRef(subject: Subject(message))
 }
@@ -136,15 +132,11 @@ fn loop(
     }
   }
 }
-// pub fn static_child(
-//   id: String,
-//   child: Spec(message),
-// ) -> Child(ActorRef(message)) {
-//   let start = fn() { child.init() |> result.map(owner) }
-//   sup.worker_child(id, start)
-//   |> Child(fn(pid) { ActorRef(pid) })
-// }
 
-// pub fn dynamic_child(spec: Spec(message)) -> DynamicChild(ActorRef(message)) {
-//   DynamicChild(spec, fn(pid) { ActorRef(pid) })
-// }
+pub fn child_spec(id: String, child: Spec(message)) -> Child(ActorRef(message)) {
+  let start = fn() {
+    use ref <- result.map(child.init())
+    #(process.subject_owner(ref.subject), ref)
+  }
+  sup.worker_child(id, start) |> Child
+}

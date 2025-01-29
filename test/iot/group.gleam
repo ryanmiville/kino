@@ -66,5 +66,5 @@ fn do_worker(
 }
 
 pub fn child_spec(group_id: String, reply_to) -> Child(SupervisorRef) {
-  supervisor.child(group_id, supervisor(reply_to))
+  supervisor.child_spec(group_id, supervisor(reply_to))
 }

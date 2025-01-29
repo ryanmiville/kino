@@ -186,7 +186,9 @@ fn handle_cast(message: message, state: ActorState(message)) {
 }
 
 pub fn child(id: String, child: Spec(message)) -> Child(ActorRef(message)) {
-  let start = fn() { child.init() |> result.map(owner) }
-  sup.worker_child(id, start)
-  |> Child(fn(pid) { ActorRef(gen_server.from_pid(pid)) })
+  let start = fn() {
+    use ref <- result.map(child.init())
+    #(owner(ref), ref)
+  }
+  Child(sup.worker_child(id, start))
 }

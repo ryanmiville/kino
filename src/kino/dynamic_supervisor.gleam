@@ -44,14 +44,15 @@ pub fn start_child(
   |> result.map(pair.second)
 }
 
-pub fn static_child(
+pub fn child_spec(
   id: String,
   child: Spec(returning),
 ) -> Child(DynamicSupervisorRef(returning)) {
-  let start = fn() { kino.start_link(child) |> result.map(fn(s) { s.pid }) }
-  let transform = fn(pid) { DynamicSupervisorRef(pid) }
-  supervisor.supervisor_child(id, start)
-  |> Child(transform)
+  let start = fn() {
+    use ref <- result.map(kino.start_link(child))
+    #(ref.pid, ref)
+  }
+  Child(supervisor.supervisor_child(id, start))
 }
 
 pub fn owner(supervisor: DynamicSupervisorRef(returning)) -> Pid {

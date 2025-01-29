@@ -64,13 +64,15 @@ pub fn start_child(
   sup: SupervisorRef,
   child: Child(ref),
 ) -> Result(ref, Dynamic) {
-  let Child(builder, transform) = child
-  use pid <- result.map(supervisor.start_child(sup.pid, builder))
-  transform(pid)
+  use #(_, ref) <- result.map(supervisor.start_child(sup.pid, child.builder))
+  ref
 }
 
-pub fn child(id: String, child: Spec) -> Child(SupervisorRef) {
-  let start = fn() { child.init() |> result.map(fn(s) { s.pid }) }
+pub fn child_spec(id: String, child: Spec) -> Child(SupervisorRef) {
+  let start = fn() {
+    use ref <- result.map(child.init())
+    #(ref.pid, ref)
+  }
   supervisor.supervisor_child(id, start)
-  |> Child(SupervisorRef)
+  |> Child
 }

@@ -22,7 +22,9 @@ supervisor_start_link(Arg) ->
 supervisor_start_child(SupRef, ChildSpec) ->
     case supervisor:start_child(SupRef, ChildSpec) of
         {ok, P} ->
-            {ok, P};
+            {ok, {P, nil}};
+        {ok, P, Info} ->
+            {ok, {P, Info}};
         {error, E} ->
             {error, E}
     end.
