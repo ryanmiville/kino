@@ -2,8 +2,10 @@ import gleam/erlang/process
 import gleeunit
 import gleeunit/should
 import iot/device
+import iot/group
 import iot/messages
 import kino/actor
+import kino/supervisor
 
 pub fn main() {
   gleeunit.main()
@@ -33,21 +35,21 @@ pub fn device_has_temp_test() {
   |> should.equal(Ok(messages.TemperatureReading(42, Ok(55.0))))
 }
 
-// pub fn group_add_device_test() {
-//   let self = process.new_subject()
-//   let probe_subject = process.new_subject()
-//   let assert Ok(probe) = new_probe(probe_subject)
+pub fn group_add_device_test() {
+  let self = process.new_subject()
+  let probe_subject = process.new_subject()
+  let assert Ok(probe) = new_probe(probe_subject)
 
-//   let assert Ok(_) = supervisor.start_link(group.supervisor(self))
-//   let assert Ok(group_actor) = process.receive(self, 10)
+  let assert Ok(_) = supervisor.start_link(group.supervisor(self))
+  let assert Ok(group_actor) = process.receive(self, 10)
 
-//   actor.send(group_actor, messages.AddDevice("device1"))
-//   actor.send(group_actor, messages.AddDevice("device2"))
-//   actor.send(group_actor, messages.AddDevice("device1"))
-//   actor.send(group_actor, messages.GetDeviceList(42, probe))
-//   process.receive(probe_subject, 10)
-//   |> should.equal(Ok(messages.DeviceList(42, ["device1", "device2"])))
-// }
+  actor.send(group_actor, messages.AddDevice("device1"))
+  actor.send(group_actor, messages.AddDevice("device2"))
+  actor.send(group_actor, messages.AddDevice("device1"))
+  actor.send(group_actor, messages.GetDeviceList(42, probe))
+  process.receive(probe_subject, 10)
+  |> should.equal(Ok(messages.DeviceList(42, ["device1", "device2"])))
+}
 
 fn new_probe(subject) {
   actor.init(fn(_) {

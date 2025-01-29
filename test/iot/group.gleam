@@ -1,7 +1,9 @@
 import gleam/dict.{type Dict}
 import gleam/erlang/process
 import iot/device
-import iot/messages.{AddDevice, DeviceList, GetDeviceList, StartDeviceSupervisor}
+import iot/messages.{
+  AddDevice, DeviceList, DeviceTerminated, GetDeviceList, StartDeviceSupervisor,
+}
 import kino/actor.{type ActorRef, type Behavior}
 import kino/dynamic_supervisor.{type DynamicSupervisorRef}
 import kino/supervisor.{type Child, type SupervisorRef}
@@ -48,7 +50,11 @@ fn do_worker(
         _ -> {
           let assert Ok(device) =
             dynamic_supervisor.start_child(device_sup, device.worker())
+
           do_worker(device_sup, dict.insert(devices, device_id, device))
+          |> actor.monitoring(actor.owner(device), fn(_) {
+            DeviceTerminated(device_id)
+          })
         }
       }
     }
@@ -56,6 +62,9 @@ fn do_worker(
       let ids = dict.keys(devices)
       actor.send(reply_to, DeviceList(request_id, ids))
       actor.continue
+    }
+    DeviceTerminated(device_id:) -> {
+      do_worker(device_sup, dict.delete(devices, device_id))
     }
     StartDeviceSupervisor -> actor.continue
   }

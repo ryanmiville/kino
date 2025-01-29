@@ -1,5 +1,7 @@
 import gleam/dynamic.{type Dynamic}
-import gleam/erlang/process.{type Pid, type Subject}
+import gleam/erlang/process.{
+  type Pid, type ProcessDown, type Selector, type Subject,
+}
 import gleam/function
 import gleam/otp/actor
 import gleam/result
@@ -17,6 +19,11 @@ pub opaque type ActorRef(message) {
 pub opaque type Behavior(message) {
   Receive(on_receive: fn(ActorRef(message), message) -> Behavior(message))
   Continue
+  Monitoring(
+    next: Behavior(message),
+    process: Pid,
+    mapping: fn(ProcessDown) -> message,
+  )
   Stop
 }
 
@@ -37,6 +44,8 @@ pub const receive = Receive
 pub const continue: Behavior(message) = Continue
 
 pub const stopped: Behavior(message) = Stop
+
+pub const monitoring = Monitoring
 
 pub fn send(actor: ActorRef(message), message: message) -> Nil {
   process.send(actor.subject, message)
@@ -92,7 +101,11 @@ fn actor_start_link(
 }
 
 type ActorState(message) {
-  ActorState(self: ActorRef(message), behavior: Behavior(message))
+  ActorState(
+    self: ActorRef(message),
+    selector: Selector(message),
+    behavior: Behavior(message),
+  )
 }
 
 fn new_spec(init: fn(ActorRef(message)) -> Behavior(message)) {
@@ -100,10 +113,10 @@ fn new_spec(init: fn(ActorRef(message)) -> Behavior(message)) {
     init: fn() {
       let self = ActorRef(process.new_subject())
       let next = init(self)
-      let state = ActorState(self, next)
       let selector =
         process.new_selector()
         |> process.selecting(self.subject, function.identity)
+      let state = ActorState(self, selector, next)
       actor.Ready(state, selector)
     },
     init_timeout: 5000,
@@ -115,21 +128,37 @@ fn loop(
   message: message,
   state: ActorState(message),
 ) -> actor.Next(message, ActorState(message)) {
-  let ActorState(context, behavior) = state
+  let ActorState(self, selector, behavior) = state
   case behavior {
-    Stop -> {
-      actor.Stop(process.Normal)
-    }
+    Stop -> actor.Stop(process.Normal)
 
-    Continue -> {
-      actor.continue(state)
+    Continue -> actor.continue(state)
+
+    Monitoring(next, process, mapping) -> {
+      let selector = monitor(process, selector, mapping)
+      let state = ActorState(self:, selector:, behavior: next)
+      actor.continue(state) |> actor.with_selector(selector)
     }
 
     Receive(handler) -> {
-      let next_behavior = handler(context, message)
+      let next_behavior = handler(self, message)
+
       case next_behavior {
         Continue -> actor.continue(state)
-        _ -> actor.continue(ActorState(context, next_behavior))
+
+        Monitoring(Continue, process, mapping) -> {
+          let selector = monitor(process, selector, mapping)
+          let state = ActorState(..state, selector:)
+          actor.continue(state) |> actor.with_selector(selector)
+        }
+
+        Monitoring(next, process, mapping) -> {
+          let selector = monitor(process, selector, mapping)
+          let state = ActorState(self:, selector:, behavior: next)
+          actor.continue(state) |> actor.with_selector(selector)
+        }
+
+        _ -> actor.continue(ActorState(self, selector, next_behavior))
       }
     }
   }
@@ -137,4 +166,12 @@ fn loop(
 
 pub fn child_spec(id: String, child: Spec(message)) -> Child(ActorRef(message)) {
   sup.worker_child(id, child.init) |> Child
+}
+
+fn monitor(pid, selector, mapping) {
+  process.selecting_process_down(
+    selector,
+    process.monitor_process(pid),
+    mapping,
+  )
 }

@@ -16,6 +16,7 @@ pub type Group {
   StartDeviceSupervisor
   AddDevice(device_id: String)
   GetDeviceList(request_id: Int, reply_to: ActorRef(DeviceList))
+  DeviceTerminated(device_id: String)
 }
 
 pub type Device {
