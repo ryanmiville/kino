@@ -6,7 +6,7 @@ pub fn worker_child_test() {
   let self = process.new_subject()
   let assert Ok(sup) = sofo.start_link(dynamic_supervisor())
 
-  let child_spec = new_stack_server(self) |> actor.dynamic_child
+  let child_spec = new_stack_server(self)
   let assert Ok(first_stack) = sofo.start_child(sup, child_spec)
   let assert Ok(_) = process.receive(self, 10)
   actor.send(first_stack, Push("first - hello"))

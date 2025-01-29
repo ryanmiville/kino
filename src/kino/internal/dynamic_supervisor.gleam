@@ -54,16 +54,16 @@ pub type AutoShutdown {
   AllSignificant
 }
 
-pub opaque type Builder(args) {
+pub opaque type Builder(args, info) {
   Builder(
     intensity: Int,
     period: Int,
     auto_shutdown: AutoShutdown,
-    child: ChildBuilder(args),
+    child: ChildBuilder(args, info),
   )
 }
 
-pub fn new(child: ChildBuilder(args)) -> Builder(args) {
+pub fn new(child: ChildBuilder(args, info)) -> Builder(args, info) {
   Builder(intensity: 2, period: 5, auto_shutdown: Never, child:)
 }
 
@@ -78,19 +78,19 @@ pub fn new(child: ChildBuilder(args)) -> Builder(args) {
 ///
 /// Intensity defaults to 1 and period defaults to 5.
 pub fn restart_tolerance(
-  builder: Builder(args),
+  builder: Builder(args, info),
   intensity intensity: Int,
   period period: Int,
-) -> Builder(args) {
+) -> Builder(args, info) {
   Builder(..builder, intensity: intensity, period: period)
 }
 
 /// A supervisor can be configured to automatically shut itself down with
 /// exit reason shutdown when significant children terminate.
 pub fn auto_shutdown(
-  builder: Builder(args),
+  builder: Builder(args, info),
   value: AutoShutdown,
-) -> Builder(args) {
+) -> Builder(args, info) {
   Builder(..builder, auto_shutdown: value)
 }
 
@@ -121,7 +121,7 @@ pub type ChildType {
   Supervisor
 }
 
-pub opaque type ChildBuilder(args) {
+pub opaque type ChildBuilder(args, info) {
   ChildBuilder(
     /// id is used to identify the child specification internally by the
     /// supervisor.
@@ -132,7 +132,7 @@ pub opaque type ChildBuilder(args) {
     /// example in error messages.
     id: String,
     /// A function to call to start the child process.
-    starter: fn(args) -> Result(Pid, Dynamic),
+    starter: fn(args) -> Result(#(Pid, info), Dynamic),
     /// When the child is to be restarted. See the `Restart` documentation for
     /// more.
     ///
@@ -166,29 +166,29 @@ pub opaque type ChildBuilder(args) {
 /// let assert Ok(p3) = sup.start_child(sup_3, #("Hello, Joe!", 42))
 /// ```
 ///
-pub opaque type DynamicSupervisor(args) {
+pub opaque type DynamicSupervisor(args, info) {
   DynamicSupervisor(pid: Pid)
 }
 
 /// Get the owner process of the supervisor
 ///
-pub fn owner(supervisor: DynamicSupervisor(args)) -> Pid {
+pub fn owner(supervisor: DynamicSupervisor(args, info)) -> Pid {
   supervisor.pid
 }
 
 // TODO this is a hack
-pub fn self() -> DynamicSupervisor(args) {
+pub fn self() -> DynamicSupervisor(args, info) {
   DynamicSupervisor(process.self())
 }
 
 // TODO this is a hack
-pub fn from_pid(pid: Pid) -> DynamicSupervisor(args) {
+pub fn from_pid(pid: Pid) -> DynamicSupervisor(args, info) {
   DynamicSupervisor(pid)
 }
 
 pub fn start_link(
-  builder: Builder(args),
-) -> Result(DynamicSupervisor(args), Dynamic) {
+  builder: Builder(args, info),
+) -> Result(DynamicSupervisor(args, info), Dynamic) {
   let flags =
     dict.new()
     |> property("strategy", SimpleOneForOne)
@@ -214,17 +214,17 @@ fn erlang_start_link(
 /// the child's `start` function.
 ///
 pub fn start_child(
-  supervisor: DynamicSupervisor(args),
+  supervisor: DynamicSupervisor(args, info),
   args: args,
-) -> Result(Pid, Dynamic) {
+) -> Result(#(Pid, info), Dynamic) {
   erlang_start_child(supervisor.pid, [[args]])
 }
 
-@external(erlang, "supervisor", "start_child")
+@external(erlang, "kino_ffi", "dynamic_supervisor_start_child")
 fn erlang_start_child(
   supervisor: Pid,
   args: List(List(args)),
-) -> Result(Pid, Dynamic)
+) -> Result(#(Pid, info), Dynamic)
 
 /// A regular child that is not also a supervisor.
 ///
@@ -237,8 +237,8 @@ fn erlang_start_child(
 ///
 pub fn worker_child(
   id id: String,
-  run starter: fn(args) -> Result(Pid, whatever),
-) -> ChildBuilder(args) {
+  run starter: fn(args) -> Result(#(Pid, info), whatever),
+) -> ChildBuilder(args, info) {
   ChildBuilder(
     id: id,
     starter: fn(args: args) { starter(args) |> result.map_error(dynamic.from) },
@@ -259,8 +259,8 @@ pub fn worker_child(
 ///
 pub fn supervisor_child(
   id id: String,
-  run starter: fn(args) -> Result(Pid, whatever),
-) -> ChildBuilder(args) {
+  run starter: fn(args) -> Result(#(Pid, info), whatever),
+) -> ChildBuilder(args, info) {
   ChildBuilder(
     id: id,
     starter: fn(args) { starter(args) |> result.map_error(dynamic.from) },
@@ -280,9 +280,9 @@ pub fn supervisor_child(
 ///
 /// The default value for significance is `False`.
 pub fn significant(
-  child: ChildBuilder(args),
+  child: ChildBuilder(args, info),
   significant: Bool,
-) -> ChildBuilder(args) {
+) -> ChildBuilder(args, info) {
   ChildBuilder(..child, significant: significant)
 }
 
@@ -293,7 +293,10 @@ pub fn significant(
 ///
 /// This will be ignored if the child is a supervisor itself.
 ///
-pub fn timeout(child: ChildBuilder(args), ms ms: Int) -> ChildBuilder(args) {
+pub fn timeout(
+  child: ChildBuilder(args, info),
+  ms ms: Int,
+) -> ChildBuilder(args, info) {
   case child.child_type {
     Worker(_) -> ChildBuilder(..child, child_type: Worker(ms))
     _ -> child
@@ -305,17 +308,21 @@ pub fn timeout(child: ChildBuilder(args), ms ms: Int) -> ChildBuilder(args) {
 ///
 /// The default value for restart is `Permanent`.
 pub fn restart(
-  child: ChildBuilder(args),
+  child: ChildBuilder(args, info),
   restart: Restart,
-) -> ChildBuilder(args) {
+) -> ChildBuilder(args, info) {
   ChildBuilder(..child, restart: restart)
 }
 
-fn convert_child(child: ChildBuilder(args)) -> Dict(Atom, Dynamic) {
+@external(erlang, "kino_ffi", "convert_starter_result")
+fn convert_starter_result(result: Result(#(Pid, info), Dynamic)) -> Dynamic
+
+fn convert_child(child: ChildBuilder(args, info)) -> Dict(Atom, Dynamic) {
+  let f = fn(args) { child.starter(args) |> convert_starter_result }
   let mfa = #(
     atom.create_from_string("erlang"),
     atom.create_from_string("apply"),
-    [dynamic.from(child.starter)],
+    [dynamic.from(f)],
   )
 
   // pub fn dynamic_child(

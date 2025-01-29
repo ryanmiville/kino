@@ -1,10 +1,9 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Pid}
+import gleam/pair
 import gleam/result
 import kino
-import kino/child.{
-  type DynamicChild, type StaticChild, DynamicChild, StaticChild,
-}
+import kino/child.{type Child, Child}
 import kino/internal/dynamic_supervisor as dyn
 import kino/internal/supervisor
 
@@ -16,7 +15,7 @@ pub opaque type DynamicSupervisorRef(returning) {
 }
 
 pub type DynamicSupervisor(returning) {
-  DynamicSupervisor(builder: dyn.Builder(kino.Spec(returning)))
+  DynamicSupervisor(builder: dyn.Builder(kino.Spec(returning), returning))
 }
 
 pub fn init(
@@ -39,26 +38,20 @@ pub fn start_link(
 
 pub fn start_child(
   ref: DynamicSupervisorRef(returning),
-  child: DynamicChild(returning),
+  child: kino.Spec(returning),
 ) -> Result(returning, Dynamic) {
-  dyn.start_child(dyn.from_pid(ref.pid), child.spec)
-  |> result.map(child.transform)
+  dyn.start_child(dyn.from_pid(ref.pid), child)
+  |> result.map(pair.second)
 }
 
 pub fn static_child(
   id: String,
   child: Spec(returning),
-) -> StaticChild(DynamicSupervisorRef(returning)) {
+) -> Child(DynamicSupervisorRef(returning)) {
   let start = fn() { kino.start_link(child) |> result.map(fn(s) { s.pid }) }
   let transform = fn(pid) { DynamicSupervisorRef(pid) }
   supervisor.supervisor_child(id, start)
-  |> StaticChild(transform)
-}
-
-pub fn dynamic_child(
-  spec: Spec(returning),
-) -> DynamicChild(DynamicSupervisorRef(returning)) {
-  DynamicChild(spec, DynamicSupervisorRef)
+  |> Child(transform)
 }
 
 pub fn owner(supervisor: DynamicSupervisorRef(returning)) -> Pid {
@@ -67,7 +60,8 @@ pub fn owner(supervisor: DynamicSupervisorRef(returning)) -> Pid {
 
 pub fn worker_children(owner: fn(returning) -> Pid) {
   dyn.worker_child("worker_child", fn(spec: kino.Spec(returning)) {
-    kino.start_link(spec) |> result.map(owner)
+    use ref <- result.map(kino.start_link(spec))
+    #(owner(ref), ref)
   })
   |> dyn.new
   |> DynamicSupervisor
@@ -75,7 +69,8 @@ pub fn worker_children(owner: fn(returning) -> Pid) {
 
 pub fn supervisor_children(owner: fn(returning) -> Pid) {
   dyn.supervisor_child("supervisor_child", fn(spec: kino.Spec(returning)) {
-    kino.start_link(spec) |> result.map(owner)
+    use ref <- result.map(kino.start_link(spec))
+    #(owner(ref), ref)
   })
   |> dyn.new
   |> DynamicSupervisor

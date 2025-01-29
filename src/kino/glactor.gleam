@@ -4,10 +4,7 @@ import gleam/function
 import gleam/otp/actor
 import gleam/result
 import kino
-import kino/child.{
-  type DynamicChild, type StaticChild, DynamicChild, StaticChild,
-}
-import kino/internal/gen_server
+import kino/child.{type Child, Child}
 import kino/internal/supervisor as sup
 
 pub type Spec(message) =
@@ -142,10 +139,10 @@ fn loop(
 // pub fn static_child(
 //   id: String,
 //   child: Spec(message),
-// ) -> StaticChild(ActorRef(message)) {
+// ) -> Child(ActorRef(message)) {
 //   let start = fn() { child.init() |> result.map(owner) }
 //   sup.worker_child(id, start)
-//   |> StaticChild(fn(pid) { ActorRef(pid) })
+//   |> Child(fn(pid) { ActorRef(pid) })
 // }
 
 // pub fn dynamic_child(spec: Spec(message)) -> DynamicChild(ActorRef(message)) {

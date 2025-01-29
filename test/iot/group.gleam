@@ -3,7 +3,7 @@ import gleam/erlang/process
 import iot/device
 import iot/messages.{AddDevice, DeviceList, GetDeviceList, StartDeviceSupervisor}
 import kino/actor.{type ActorRef, type Behavior}
-import kino/child.{type StaticChild, StaticChild}
+import kino/child.{type Child, Child}
 import kino/dynamic_supervisor.{type DynamicSupervisorRef}
 import kino/supervisor.{type SupervisorRef}
 
@@ -12,7 +12,7 @@ pub type Message =
 
 pub fn supervisor(reply_to) {
   use self <- supervisor.init()
-  let child = actor.static_child("group_worker", worker(self, reply_to))
+  let child = actor.child("group_worker", worker(self, reply_to))
   supervisor.new() |> supervisor.add_child(child)
 }
 
@@ -51,10 +51,7 @@ fn do_worker(
         }
         _ -> {
           let assert Ok(device) =
-            dynamic_supervisor.start_child(
-              device_sup,
-              device.worker_child_spec(),
-            )
+            dynamic_supervisor.start_child(device_sup, device.worker())
           do_worker(device_sup, dict.insert(devices, device_id, device))
         }
       }
@@ -68,6 +65,6 @@ fn do_worker(
   }
 }
 
-pub fn child_spec(group_id: String, reply_to) -> StaticChild(SupervisorRef) {
-  supervisor.static_child(group_id, supervisor(reply_to))
+pub fn child_spec(group_id: String, reply_to) -> Child(SupervisorRef) {
+  supervisor.child(group_id, supervisor(reply_to))
 }

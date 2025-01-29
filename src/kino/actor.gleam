@@ -2,9 +2,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/result
 import kino
-import kino/child.{
-  type DynamicChild, type StaticChild, DynamicChild, StaticChild,
-}
+import kino/child.{type Child, Child}
 import kino/internal/gen_server
 import kino/internal/supervisor as sup
 
@@ -187,15 +185,8 @@ fn handle_cast(message: message, state: ActorState(message)) {
   }
 }
 
-pub fn static_child(
-  id: String,
-  child: Spec(message),
-) -> StaticChild(ActorRef(message)) {
+pub fn child(id: String, child: Spec(message)) -> Child(ActorRef(message)) {
   let start = fn() { child.init() |> result.map(owner) }
   sup.worker_child(id, start)
-  |> StaticChild(fn(pid) { ActorRef(gen_server.from_pid(pid)) })
-}
-
-pub fn dynamic_child(spec: Spec(message)) -> DynamicChild(ActorRef(message)) {
-  DynamicChild(spec, fn(pid) { ActorRef(gen_server.from_pid(pid)) })
+  |> Child(fn(pid) { ActorRef(gen_server.from_pid(pid)) })
 }

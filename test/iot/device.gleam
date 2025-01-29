@@ -3,9 +3,7 @@ import iot/messages.{
   type Temperature, GetTemperature, RecordTemperature, TemperatureReading,
 }
 import kino/actor.{type ActorRef, type Behavior}
-import kino/child.{
-  type DynamicChild, type StaticChild, DynamicChild, StaticChild,
-}
+import kino/child.{type Child, Child}
 import kino/dynamic_supervisor.{type DynamicSupervisorRef}
 
 pub type Message =
@@ -34,12 +32,8 @@ fn do_worker(last_reading: Temperature) -> Behavior(Message) {
   }
 }
 
-pub fn worker_child_spec() -> DynamicChild(ActorRef(Message)) {
-  actor.dynamic_child(worker())
-}
-
 pub fn supervisor_child_spec(
   id: String,
-) -> StaticChild(DynamicSupervisorRef(ActorRef(Message))) {
+) -> Child(DynamicSupervisorRef(ActorRef(Message))) {
   dynamic_supervisor.static_child(id, supervisor())
 }
