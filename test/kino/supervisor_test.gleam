@@ -40,7 +40,7 @@ fn sup(subject) -> supervisor.Spec {
 
   let worker = supervisor.worker_child("stack-1", new_stack_server(subject))
 
-  supervisor.new() |> supervisor.add_child(worker)
+  supervisor.new(supervisor.OneForOne) |> supervisor.add_child(worker)
 }
 
 pub type Message(element) {

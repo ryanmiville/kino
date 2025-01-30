@@ -10,7 +10,7 @@ pub type Message =
 
 pub fn supervisor() -> dynamic_supervisor.Spec(ActorRef(Message)) {
   use _ <- dynamic_supervisor.init()
-  dynamic_supervisor.worker_children()
+  dynamic_supervisor.worker_children(dynamic_supervisor.Permanent)
 }
 
 pub fn worker() -> actor.Spec(Message) {

@@ -14,7 +14,7 @@ pub type Message =
 pub fn supervisor(reply_to) {
   use self <- supervisor.init()
   let child = supervisor.worker_child("group_worker", worker(self, reply_to))
-  supervisor.new() |> supervisor.add_child(child)
+  supervisor.new(supervisor.OneForOne) |> supervisor.add_child(child)
 }
 
 pub fn worker(sup: SupervisorRef, reply_to) -> actor.Spec(Message) {

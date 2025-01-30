@@ -36,7 +36,7 @@ pub fn worker_child_test() {
 
 fn dynamic_supervisor() -> dynamic_supervisor.Spec(ActorRef(a)) {
   use _ <- dynamic_supervisor.init()
-  dynamic_supervisor.worker_children()
+  dynamic_supervisor.worker_children(dynamic_supervisor.Permanent)
 }
 
 pub type Message(element) {

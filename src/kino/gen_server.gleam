@@ -2,9 +2,7 @@ import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/result
 import kino
-import kino/child.{type Child, Child}
 import kino/internal/gen_server
-import kino/internal/supervisor as sup
 
 pub type Spec(message) =
   kino.Spec(GenServerRef(message))
@@ -181,8 +179,4 @@ fn handle_cast(message: message, state: ActorState(message)) {
     Continue -> gen_server.Noreply(state)
     Stop -> gen_server.Stop(process.Normal, state)
   }
-}
-
-pub fn child(id: String, child: Spec(message)) -> Child(GenServerRef(message)) {
-  Child(sup.worker_child(id, child.init))
 }

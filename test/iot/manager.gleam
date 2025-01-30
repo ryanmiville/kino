@@ -13,7 +13,7 @@ pub type Message =
 pub fn supervisor() {
   use self <- supervisor.init()
   let child = supervisor.worker_child("manager_worker", worker(self))
-  supervisor.new() |> supervisor.add_child(child)
+  supervisor.new(supervisor.OneForOne) |> supervisor.add_child(child)
 }
 
 fn worker(sup: SupervisorRef) {

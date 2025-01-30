@@ -3,15 +3,26 @@ import gleam/erlang/process.{type Pid}
 import gleam/pair
 import gleam/result
 import kino
-import kino/child.{type Child, Child}
 import kino/internal/dynamic_supervisor as dyn
-import kino/internal/supervisor
 
 pub type Spec(returning) =
   kino.Spec(DynamicSupervisorRef(returning))
 
 pub opaque type DynamicSupervisorRef(returning) {
   DynamicSupervisorRef(pid: Pid)
+}
+
+pub type Restart {
+  /// A permanent child process is always restarted.
+  Permanent
+  /// A transient child process is restarted only if it terminates abnormally,
+  /// that is, with another exit reason than `normal`, `shutdown`, or
+  /// `{shutdown,Term}`.
+  Transient
+  /// A temporary child process is never restarted (even when the supervisor's
+  /// restart strategy is `RestForOne` or `OneForAll` and a sibling's death
+  /// causes the temporary process to be terminated).
+  Temporary
 }
 
 pub type DynamicSupervisor(returning) {
@@ -44,33 +55,33 @@ pub fn start_child(
   |> result.map(pair.second)
 }
 
-pub fn child_spec(
-  id: String,
-  child: Spec(returning),
-) -> Child(DynamicSupervisorRef(returning)) {
-  let start = fn() {
-    use ref <- result.map(kino.start_link(child))
-    #(ref.pid, ref)
-  }
-  Child(supervisor.supervisor_child(id, start))
-}
-
 pub fn owner(supervisor: DynamicSupervisorRef(returning)) -> Pid {
   supervisor.pid
 }
 
-pub fn worker_children() {
+pub fn worker_children(restart: Restart) {
   dyn.worker_child("worker_child", fn(spec: kino.Spec(returning)) {
     spec.init()
   })
+  |> set_restart(restart)
   |> dyn.new
   |> DynamicSupervisor
 }
 
-pub fn supervisor_children() {
+pub fn supervisor_children(restart: Restart) {
   dyn.supervisor_child("supervisor_child", fn(spec: kino.Spec(returning)) {
     spec.init()
   })
+  |> set_restart(restart)
   |> dyn.new
   |> DynamicSupervisor
+}
+
+fn set_restart(child, restart) {
+  let restart = case restart {
+    Permanent -> dyn.Permanent
+    Temporary -> dyn.Temporary
+    Transient -> dyn.Transient
+  }
+  dyn.restart(child, restart)
 }

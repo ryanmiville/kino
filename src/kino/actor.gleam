@@ -6,8 +6,6 @@ import gleam/function
 import gleam/otp/actor
 import gleam/result
 import kino
-import kino/child.{type Child, Child}
-import kino/internal/supervisor as sup
 
 pub type Spec(message) =
   kino.Spec(ActorRef(message))
@@ -49,6 +47,14 @@ pub const monitoring = Monitoring
 
 pub fn send(actor: ActorRef(message), message: message) -> Nil {
   process.send(actor.subject, message)
+}
+
+pub fn send_after(
+  actor: ActorRef(message),
+  delay: Int,
+  message: message,
+) -> process.Timer {
+  process.send_after(actor.subject, delay, message)
 }
 
 pub fn call(
@@ -132,7 +138,7 @@ fn loop(
   case behavior {
     Stop -> actor.Stop(process.Normal)
 
-    Continue -> actor.continue(state)
+    Continue -> actor.continue(state) |> actor.with_selector(selector)
 
     Monitoring(next, process, mapping) -> {
       let selector = monitor(process, selector, mapping)
@@ -144,7 +150,9 @@ fn loop(
       let next_behavior = handler(self, message)
 
       case next_behavior {
-        Continue -> actor.continue(state)
+        Stop -> actor.Stop(process.Normal)
+
+        Continue -> actor.continue(state) |> actor.with_selector(selector)
 
         Monitoring(Continue, process, mapping) -> {
           let selector = monitor(process, selector, mapping)
@@ -158,14 +166,12 @@ fn loop(
           actor.continue(state) |> actor.with_selector(selector)
         }
 
-        _ -> actor.continue(ActorState(self, selector, next_behavior))
+        _ ->
+          actor.continue(ActorState(self, selector, next_behavior))
+          |> actor.with_selector(selector)
       }
     }
   }
-}
-
-pub fn child_spec(id: String, child: Spec(message)) -> Child(ActorRef(message)) {
-  sup.worker_child(id, child.init) |> Child
 }
 
 fn monitor(pid, selector, mapping) {
