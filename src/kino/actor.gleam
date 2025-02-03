@@ -200,10 +200,3 @@ fn loop(
     }
   }
 }
-// fn monitor(pid, selector, mapping) {
-//   process.selecting_process_down(
-//     selector,
-//     process.monitor_process(pid),
-//     mapping,
-//   )
-// }
