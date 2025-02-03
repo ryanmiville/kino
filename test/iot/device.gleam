@@ -23,7 +23,7 @@ fn do_worker(last_reading: Temperature) -> Behavior(Message) {
   case message {
     GetTemperature(request_id:, reply_to:) -> {
       actor.send(reply_to, TemperatureReading(request_id, last_reading))
-      actor.continue
+      actor.continue()
     }
     RecordTemperature(temperature) -> {
       do_worker(Ok(temperature))

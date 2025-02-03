@@ -31,7 +31,7 @@ fn do_worker(
       case dict.get(groups, group_id) {
         Ok(group) -> {
           actor.send(group, messages.AddDevice(device_id))
-          actor.continue
+          actor.continue()
         }
         _ -> {
           let self = process.new_subject()
@@ -47,11 +47,11 @@ fn do_worker(
       case dict.get(groups, group_id) {
         Ok(group) -> {
           actor.send(group, messages.GetDeviceList(request_id, reply_to))
-          actor.continue
+          actor.continue()
         }
         _ -> {
           actor.send(reply_to, messages.DeviceList(request_id, []))
-          actor.continue
+          actor.continue()
         }
       }
     }

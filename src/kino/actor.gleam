@@ -1,7 +1,5 @@
 import gleam/dynamic.{type Dynamic}
-import gleam/erlang/process.{
-  type Pid, type ProcessDown, type Selector, type Subject,
-}
+import gleam/erlang/process.{type Pid, type Selector, type Subject}
 import gleam/function
 import gleam/otp/actor
 import gleam/result
@@ -14,15 +12,41 @@ pub opaque type ActorRef(message) {
   ActorRef(subject: Subject(message))
 }
 
+pub opaque type NextSelector(message) {
+  SameSelector
+  ReplaceSelector(selector: Selector(message))
+  AddSelector(selector: Selector(message))
+}
+
 pub opaque type Behavior(message) {
-  Receive(on_receive: fn(ActorRef(message), message) -> Behavior(message))
-  Continue
-  Monitoring(
-    next: Behavior(message),
-    process: Pid,
-    mapping: fn(ProcessDown) -> message,
+  Receive(
+    on_receive: fn(ActorRef(message), message) -> Behavior(message),
+    selector: NextSelector(message),
   )
+  Continue(selector: NextSelector(message))
   Stop
+}
+
+pub fn add_selector(
+  behavior: Behavior(message),
+  selector: Selector(message),
+) -> Behavior(message) {
+  case behavior {
+    Receive(on_receive, _) -> Receive(on_receive, AddSelector(selector))
+    Continue(_) -> Continue(AddSelector(selector))
+    Stop -> Stop
+  }
+}
+
+pub fn replace_selector(
+  behavior: Behavior(message),
+  selector: Selector(message),
+) -> Behavior(message) {
+  case behavior {
+    Receive(on_receive, _) -> Receive(on_receive, ReplaceSelector(selector))
+    Continue(_) -> Continue(ReplaceSelector(selector))
+    Stop -> Stop
+  }
 }
 
 pub fn init(init: fn(ActorRef(message)) -> Behavior(message)) -> Spec(message) {
@@ -37,13 +61,15 @@ pub fn start_link(spec: Spec(message)) -> Result(ActorRef(message), Dynamic) {
   kino.start_link(spec)
 }
 
-pub const receive = Receive
+pub fn receive(on_receive: fn(ActorRef(message), message) -> Behavior(message)) {
+  Receive(on_receive, SameSelector)
+}
 
-pub const continue: Behavior(message) = Continue
+pub fn continue() -> Behavior(message) {
+  Continue(SameSelector)
+}
 
 pub const stopped: Behavior(message) = Stop
-
-pub const monitoring = Monitoring
 
 pub fn send(actor: ActorRef(message), message: message) -> Nil {
   process.send(actor.subject, message)
@@ -138,33 +164,34 @@ fn loop(
   case behavior {
     Stop -> actor.Stop(process.Normal)
 
-    Continue -> actor.continue(state) |> actor.with_selector(selector)
-
-    Monitoring(next, process, mapping) -> {
-      let selector = monitor(process, selector, mapping)
-      let state = ActorState(self:, selector:, behavior: next)
-      actor.continue(state) |> actor.with_selector(selector)
+    Continue(SameSelector) -> actor.continue(state)
+    Continue(AddSelector(new_selector)) -> {
+      actor.continue(state)
+      |> actor.with_selector(process.merge_selector(selector, new_selector))
     }
+    Continue(ReplaceSelector(new_selector)) ->
+      actor.continue(state) |> actor.with_selector(new_selector)
 
-    Receive(handler) -> {
+    Receive(handler, selector) -> {
+      let selector = case selector {
+        SameSelector -> state.selector
+        AddSelector(new_selector) ->
+          process.merge_selector(state.selector, new_selector)
+        ReplaceSelector(new_selector) -> new_selector
+      }
+      let state = ActorState(self, selector, behavior)
       let next_behavior = handler(self, message)
 
       case next_behavior {
         Stop -> actor.Stop(process.Normal)
 
-        Continue -> actor.continue(state) |> actor.with_selector(selector)
-
-        Monitoring(Continue, process, mapping) -> {
-          let selector = monitor(process, selector, mapping)
-          let state = ActorState(..state, selector:)
-          actor.continue(state) |> actor.with_selector(selector)
+        Continue(SameSelector) -> actor.continue(state)
+        Continue(AddSelector(new_selector)) -> {
+          actor.continue(state)
+          |> actor.with_selector(process.merge_selector(selector, new_selector))
         }
-
-        Monitoring(next, process, mapping) -> {
-          let selector = monitor(process, selector, mapping)
-          let state = ActorState(self:, selector:, behavior: next)
-          actor.continue(state) |> actor.with_selector(selector)
-        }
+        Continue(ReplaceSelector(new_selector)) ->
+          actor.continue(state) |> actor.with_selector(new_selector)
 
         _ ->
           actor.continue(ActorState(self, selector, next_behavior))
@@ -173,11 +200,10 @@ fn loop(
     }
   }
 }
-
-fn monitor(pid, selector, mapping) {
-  process.selecting_process_down(
-    selector,
-    process.monitor_process(pid),
-    mapping,
-  )
-}
+// fn monitor(pid, selector, mapping) {
+//   process.selecting_process_down(
+//     selector,
+//     process.monitor_process(pid),
+//     mapping,
+//   )
+// }

@@ -1,3 +1,4 @@
+import gleam/erlang/process.{type ProcessDown}
 import kino/actor.{type ActorRef}
 
 pub type Manager {
@@ -16,7 +17,7 @@ pub type Group {
   StartDeviceSupervisor
   AddDevice(device_id: String)
   GetDeviceList(request_id: Int, reply_to: ActorRef(DeviceList))
-  DeviceTerminated(device_id: String)
+  DeviceTerminated(device_id: String, down: ProcessDown)
 }
 
 pub type Device {

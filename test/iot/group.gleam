@@ -45,28 +45,33 @@ fn do_worker(
     AddDevice(device_id) -> {
       case dict.get(devices, device_id) {
         Ok(_) -> {
-          actor.continue
+          actor.continue()
         }
         _ -> {
           let assert Ok(device) =
             dynamic_supervisor.start_child(device_sup, device.worker())
 
+          let selector =
+            process.selecting_process_down(
+              process.new_selector(),
+              process.monitor_process(actor.owner(device)),
+              DeviceTerminated(device_id, _),
+            )
+
           do_worker(device_sup, dict.insert(devices, device_id, device))
-          |> actor.monitoring(actor.owner(device), fn(_) {
-            DeviceTerminated(device_id)
-          })
+          |> actor.add_selector(selector)
         }
       }
     }
     GetDeviceList(request_id:, reply_to:) -> {
       let ids = dict.keys(devices)
       actor.send(reply_to, DeviceList(request_id, ids))
-      actor.continue
+      actor.continue()
     }
-    DeviceTerminated(device_id:) -> {
+    DeviceTerminated(device_id, _down) -> {
       do_worker(device_sup, dict.delete(devices, device_id))
     }
-    StartDeviceSupervisor -> actor.continue
+    StartDeviceSupervisor -> actor.continue()
   }
 }
 

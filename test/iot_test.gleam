@@ -55,7 +55,7 @@ fn new_probe(subject) {
   actor.init(fn(_) {
     use _, message <- actor.receive()
     process.send(subject, message)
-    actor.continue
+    actor.continue()
   })
   |> actor.start_link
 }

@@ -1,7 +1,5 @@
 import gleam/deque.{type Deque}
-import gleam/erlang/process.{type Subject}
-import gleam/int
-import gleam/io
+import gleam/erlang/process.{type ProcessDown, type Subject}
 import gleam/set.{type Set}
 import kino/actor.{type ActorRef, type Behavior}
 import kino/dynamic_supervisor.{type DynamicSupervisorRef} as dyn
@@ -22,7 +20,7 @@ pub type Message {
   Run(args: worker.State, reply_to: ReplyTo)
   Sync(args: worker.State, reply_to: ReplyTo)
   Async(args: worker.State)
-  WorkerDown(worker: ActorRef(worker.Message))
+  WorkerDown(worker: ActorRef(worker.Message), ProcessDown)
   Stop
 }
 
@@ -92,17 +90,16 @@ fn loop(state: State) -> Behavior(Message) {
       }
     }
 
-    WorkerDown(worker:) -> {
-      io.println("Entering worker down")
+    WorkerDown(worker, _) -> {
       case set.contains(state.refs, worker) {
         True -> down_worker(state, worker)
-        False -> actor.continue
+        False -> actor.continue()
       }
     }
 
     Stop -> actor.stopped
 
-    StartWorkerSupervisor -> actor.continue
+    StartWorkerSupervisor -> actor.continue()
   }
 }
 
@@ -112,8 +109,14 @@ fn run_sync(state: State, args, reply_to) {
   let refs = set.insert(state.refs, worker)
   let limit = state.limit - 1
 
+  let selector =
+    process.selecting_process_down(
+      process.new_selector(),
+      process.monitor_process(actor.owner(worker)),
+      WorkerDown(worker, _),
+    )
   loop(State(..state, limit:, refs:))
-  |> actor.monitoring(actor.owner(worker), fn(_) { WorkerDown(worker) })
+  |> actor.add_selector(selector)
 }
 
 fn add_sync(state: State, args, reply_to) {
@@ -128,7 +131,7 @@ fn add_async(state: State, args) {
 
 fn noalloc(reply_to) {
   process.send(reply_to, Error(NoAlloc))
-  actor.continue
+  actor.continue()
 }
 
 fn run_async(state: State, args) {
@@ -136,12 +139,17 @@ fn run_async(state: State, args) {
   let refs = set.insert(state.refs, worker)
   let limit = state.limit - 1
 
+  let selector =
+    process.selecting_process_down(
+      process.new_selector(),
+      process.monitor_process(actor.owner(worker)),
+      WorkerDown(worker, _),
+    )
   loop(State(..state, limit:, refs:))
-  |> actor.monitoring(actor.owner(worker), fn(_) { WorkerDown(worker) })
+  |> actor.add_selector(selector)
 }
 
 fn has_space(limit) {
-  io.println("current space: " <> int.to_string(limit))
   limit > 0
 }
 
