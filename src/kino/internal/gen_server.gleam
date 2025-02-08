@@ -1,150 +1,126 @@
 import gleam/dynamic.{type Dynamic}
+import gleam/erlang.{type Reference}
 import gleam/erlang/atom.{type Atom}
 import gleam/erlang/process.{type ExitReason, type Pid}
-import gleam/result
+import gleam/option.{type Option, None, Some}
 
-pub opaque type GenServer(message, reply) {
-  PidRef(Pid)
-  NameRef(Atom)
-}
+pub type From
 
-pub type From(accepts)
-
-pub type Spec(init_args, message, reply, state) {
-  Spec(
-    init: fn(init_args) -> Result(state, Dynamic),
-    handle_call: fn(message, From(reply), state) -> Response(reply, state),
-    handle_cast: fn(message, state) -> Response(reply, state),
-    terminate: fn(ExitReason, state) -> Dynamic,
-  )
-}
-
-// TODO this is a hack
-pub fn self() -> GenServer(message, reply) {
-  PidRef(process.self())
-}
-
-// TODO this is a hack
-pub fn from_pid(pid: Pid) -> GenServer(message, reply) {
-  PidRef(pid)
-}
-
-pub type Response(reply, state) {
-  Reply(reply, state)
-  Noreply(state)
+pub opaque type Response(state) {
+  Noreply(state: state, timeout: Dynamic)
   Stop(ExitReason, state)
 }
 
-pub fn start_link(
-  spec: Spec(init_args, message, reply, state),
-  args: init_args,
-) -> Result(GenServer(message, reply), Dynamic) {
-  do_start_link(#(spec, args)) |> result.map(PidRef)
+pub fn no_reply(state: state) -> Response(state) {
+  Noreply(state, dynamic.from(Infinity))
 }
 
-pub fn owner(server: GenServer(a, b)) -> Pid {
-  case server {
-    PidRef(pid) -> pid
-    NameRef(_name) -> panic as "not implemented"
+pub fn with_timeout(response: Response(state), timeout: Int) -> Response(state) {
+  case response {
+    Noreply(state, _) -> Noreply(state, dynamic.from(timeout))
+    _ -> response
   }
 }
 
-pub fn call(
-  server: GenServer(message, reply),
-  message: message,
-  timeout: Int,
-) -> reply {
-  let timeout = dynamic.from(timeout)
-  case server {
-    PidRef(pid) -> do_call(dynamic.from(pid), message, timeout)
-    NameRef(name) -> do_call(dynamic.from(name), message, timeout)
+pub fn stop(state: state, reason: ExitReason) -> Response(state) {
+  Stop(reason, state)
+}
+
+pub type Info {
+  Timeout
+  ProcessDown(pid: Pid, ref: Reference, reason: Dynamic)
+  Unexpected(Dynamic)
+}
+
+pub type InitResult(state) {
+  Ready(state: state, timeout: Option(Int))
+  Failed(reason: Dynamic)
+}
+
+pub type Builder(args, call_request, cast_request, state) {
+  Builder(
+    init: fn(args) -> InitResult(state),
+    handle_call: fn(call_request, From, state) -> Response(state),
+    handle_cast: fn(cast_request, state) -> Response(state),
+    handle_info: fn(Info, state) -> Response(state),
+    terminate: fn(ExitReason, state) -> Dynamic,
+    name: Option(Atom),
+  )
+}
+
+pub type State(args, call_request, cast_request, state) {
+  State(state: state, builder: Builder(args, call_request, cast_request, state))
+}
+
+type Infinity {
+  Infinity
+}
+
+pub fn timeout(timeout: Option(Int)) -> Dynamic {
+  case timeout {
+    None -> dynamic.from(Infinity)
+    Some(timeout) -> dynamic.from(timeout)
   }
 }
 
-pub fn call_forever(
-  server: GenServer(message, reply),
-  message: message,
-) -> reply {
-  let timeout = atom.create_from_string("infinity") |> dynamic.from
-  case server {
-    PidRef(pid) -> do_call(dynamic.from(pid), message, timeout)
-    NameRef(name) -> do_call(dynamic.from(name), message, timeout)
-  }
-}
-
-pub fn cast(server: GenServer(message, reply), message: message) -> Nil {
-  let _ = case server {
-    PidRef(pid) -> do_cast(dynamic.from(pid), message)
-    NameRef(name) -> do_cast(dynamic.from(name), message)
-  }
-  Nil
-}
-
-@external(erlang, "gen_server", "call")
-fn do_call(id: Dynamic, message: message, timeout: Dynamic) -> reply
-
-@external(erlang, "gen_server", "cast")
-fn do_cast(id: Dynamic, message: message) -> Result(Nil, never)
-
-@internal
-pub type State(init_args, message, reply, state) {
-  State(state: state, spec: Spec(init_args, message, reply, state))
-}
-
-@internal
 pub fn init(
-  start_data: #(Spec(init_args, message, reply, state), init_args),
-) -> Result(State(init_args, message, reply, state), Dynamic) {
-  let #(spec, args) = start_data
-  use state <- result.map(spec.init(args))
-  State(state, spec)
+  start_data: #(Builder(args, call_request, cast_request, state), args),
+) -> Dynamic {
+  let #(builder, args) = start_data
+  case builder.init(args) {
+    Ready(state, Some(timeout)) ->
+      #(atom.create_from_string("ok"), State(state, builder), timeout)
+      |> dynamic.from
+    Ready(state, _) -> Ok(State(state, builder)) |> dynamic.from
+    Failed(reason) -> Error(reason) |> dynamic.from
+  }
 }
 
-@internal
 pub fn handle_call(
-  request: request,
-  from: From(reply),
-  state: State(init_args, request, reply, state),
+  request: call_request,
+  from: From,
+  state: State(args, call_request, cast_request, state),
 ) -> Dynamic {
-  state.spec.handle_call(request, from, state.state)
+  state.builder.handle_call(request, from, state.state)
   |> wrap(state)
   |> dynamic.from
 }
 
-@internal
 pub fn handle_cast(
-  request: request,
-  state: State(init_args, request, reply, state),
+  request: cast_request,
+  state: State(args, call_request, cast_request, state),
 ) -> Dynamic {
-  state.spec.handle_cast(request, state.state)
+  state.builder.handle_cast(request, state.state)
   |> wrap(state)
   |> dynamic.from
 }
 
-@internal
 pub fn handle_info(
-  _request: request,
-  state: State(init_args, request, reply, state),
+  request: Dynamic,
+  state: State(args, call_request, cast_request, state),
 ) -> Dynamic {
-  dynamic.from(Noreply(state))
+  state.builder.handle_info(convert_handle_info_request(request), state.state)
+  |> wrap(state)
+  |> dynamic.from
 }
 
-@internal
 pub fn terminate(
   reason: ExitReason,
-  state: State(init_args, request, reply, state),
+  state: State(args, call_request, cast_request, state),
 ) -> Dynamic {
-  state.spec.terminate(reason, state.state)
+  state.builder.terminate(reason, state.state)
 }
 
-@internal
 pub fn code_change(
   _old_vsn: Dynamic,
-  state: State(init_args, request, reply, state),
+  state: State(args, call_request, cast_request, state),
   _extra: Dynamic,
-) -> Result(State(init_args, request, reply, state), Dynamic) {
+) -> Result(State(args, call_request, cast_request, state), Dynamic) {
   Ok(state)
 }
+
+@external(erlang, "kino_ffi", "gen_server_format_status")
+pub fn format_status(status: status) -> status
 
 fn new_state(old_state, state) {
   State(..old_state, state: state)
@@ -152,15 +128,10 @@ fn new_state(old_state, state) {
 
 fn wrap(response, old_state) {
   case response {
-    Reply(reply, state) -> {
-      Reply(reply, new_state(old_state, state))
-    }
-    Noreply(state) -> Noreply(new_state(old_state, state))
+    Noreply(state, timeout) -> Noreply(new_state(old_state, state), timeout)
     Stop(reason, state) -> Stop(reason, new_state(old_state, state))
   }
 }
 
-@external(erlang, "kino_ffi", "server_start_link")
-fn do_start_link(
-  start_data: #(Spec(init_args, message, reply, state), init_args),
-) -> Result(Pid, Dynamic)
+@external(erlang, "kino_ffi", "convert_handle_info_request")
+fn convert_handle_info_request(request: Dynamic) -> Info

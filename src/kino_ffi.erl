@@ -1,48 +1,24 @@
 -module(kino_ffi).
 
--export([convert_starter_result/1, server_start_link/1, dynamic_supervisor_start_child/2,
-         supervisor_start_link/1, supervisor_start_child/2]).
+-export([identity/1, gen_server_format_status/1, convert_handle_info_request/1]).
 
-server_start_link(Arg) ->
-    case gen_server:start_link(kino@internal@gen_server, Arg, []) of
-        {ok, Pid} ->
-            {ok, Pid};
-        {error, Reason} ->
-            {error, Reason}
-    end.
+gen_server_format_status(Status) ->
+    NewStatus =
+        maps:map(fun (state, {state, State, _Builder}) ->
+                         State;
+                     (_, Value) ->
+                         Value
+                 end,
+                 Status),
+    io:format("~p~n", [NewStatus]),
+    NewStatus.
 
-supervisor_start_link(Arg) ->
-    case supervisor:start_link(kino@internal@supervisor, Arg) of
-        {ok, P} ->
-            {ok, P};
-        {error, E} ->
-            {error, {init_crashed, E}}
-    end.
+convert_handle_info_request({'DOWN', Ref, process, Pid, Reason}) ->
+    {process_down, Pid, Ref, Reason};
+convert_handle_info_request(timeout) ->
+    timeout;
+convert_handle_info_request(Other) ->
+    {unexpected, Other}.
 
-supervisor_start_child(SupRef, ChildSpec) ->
-    case supervisor:start_child(SupRef, ChildSpec) of
-        {ok, P} ->
-            {ok, {P, nil}};
-        {ok, P, Info} ->
-            {ok, {P, Info}};
-        {error, E} ->
-            {error, E}
-    end.
-
-dynamic_supervisor_start_child(SupRef, ChildSpec) ->
-    case supervisor:start_child(SupRef, ChildSpec) of
-        {ok, P} ->
-            {ok, {P, nil}};
-        {ok, P, Info} ->
-            {ok, {P, Info}};
-        {error, E} ->
-            {error, E}
-    end.
-
-convert_starter_result(Res) ->
-    case Res of
-        {ok, {Pid, Info}} ->
-            {ok, Pid, Info};
-        {error, E} ->
-            {error, E}
-    end.
+identity(X) ->
+    X.
