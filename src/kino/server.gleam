@@ -4,6 +4,7 @@ import gleam/erlang/atom.{type Atom}
 import gleam/erlang/charlist.{type Charlist}
 import gleam/erlang/process.{type ExitReason, type Pid}
 import gleam/option.{type Option, None, Some}
+import gleam/otp/static_supervisor
 import gleam/result
 import gleam/string
 import kino/internal/gen_server
@@ -128,42 +129,23 @@ pub fn owner(server: Server(request)) -> Result(Pid, Nil) {
 
 pub fn child_spec(
   builder: Builder(args, request, state),
-) -> fn(args) -> fn() -> Result(Pid, Dynamic) {
-  fn(args) { fn() { start_link(builder, args) |> to_supervise_result } }
+  id: String,
+  args: args,
+) -> static_supervisor.ChildBuilder {
+  static_supervisor.worker_child(id, fn() {
+    start_link(builder, args) |> to_supervise_result
+  })
 }
 
 pub fn child_spec_ack(
   builder: Builder(args, request, state),
-) -> fn(args, process.Subject(Server(request))) -> fn() -> Result(Pid, Dynamic) {
-  fn(args, ack) {
-    fn() { start_link(builder, args) |> to_supervise_result_ack(ack) }
-  }
-}
-
-fn to_internal_builder(
-  builder: Builder(args, request, state),
-) -> gen_server.Builder(args, Call(request), request, State(state, request)) {
-  let Builder(init:, handler:, name:, ..) = builder
-  gen_server.Builder(
-    init: fn(args) {
-      case init(args) {
-        Ready(state) -> {
-          let state = State(state, self(builder.name), handler)
-          gen_server.Ready(state, None)
-        }
-        Timeout(state, timeout) -> {
-          let state = State(state, self(builder.name), handler)
-          gen_server.Ready(state, Some(timeout))
-        }
-        Failed(reason) -> gen_server.Failed(reason)
-      }
-    },
-    handle_call: handle_call,
-    handle_cast: handle_cast,
-    handle_info: handle_info(builder),
-    terminate: fn(_, _) { dynamic.from(Nil) },
-    name: name,
-  )
+  id: String,
+  args: args,
+  ack: process.Subject(Server(request)),
+) -> static_supervisor.ChildBuilder {
+  static_supervisor.worker_child(id, fn() {
+    start_link(builder, args) |> to_supervise_result_ack(ack)
+  })
 }
 
 pub fn call(
@@ -216,11 +198,37 @@ pub fn stop(server: Server(request)) -> Nil {
   Nil
 }
 
-pub opaque type Call(request) {
+fn to_internal_builder(
+  builder: Builder(args, request, state),
+) -> gen_server.Builder(args, Call(request), request, State(state, request)) {
+  let Builder(init:, handler:, name:, ..) = builder
+  gen_server.Builder(
+    init: fn(args) {
+      case init(args) {
+        Ready(state) -> {
+          let state = State(state, self(builder.name), handler)
+          gen_server.Ready(state, None)
+        }
+        Timeout(state, timeout) -> {
+          let state = State(state, self(builder.name), handler)
+          gen_server.Ready(state, Some(timeout))
+        }
+        Failed(reason) -> gen_server.Failed(reason)
+      }
+    },
+    handle_call: handle_call,
+    handle_cast: handle_cast,
+    handle_info: handle_info(builder),
+    terminate: fn(_, _) { dynamic.from(Nil) },
+    name: name,
+  )
+}
+
+type Call(request) {
   Call(make_request: fn(gen_server.From) -> request)
 }
 
-pub type State(state, request) {
+type State(state, request) {
   State(
     state: state,
     self: Server(request),

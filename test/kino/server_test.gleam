@@ -106,7 +106,7 @@ pub fn timeout_test() {
 
   get_server_state(server) |> should.equal(dynamic.from("hello"))
 
-  process.sleep(10)
+  process.sleep(20)
 
   get_server_state(server) |> should.equal(dynamic.from("TIMEOUT"))
 
@@ -120,11 +120,11 @@ pub fn named_server_test() {
       server.continue(req)
     })
     |> server.name(atom.create_from_string("named_server_test"))
-    |> server.child_spec_ack
+    |> server.child_spec_ack("named_server_test", "state 1", self)
 
   let assert Ok(_) =
     sup.new(sup.OneForOne)
-    |> sup.add(sup.worker_child("worker", child_spec("state 1", self)))
+    |> sup.add(child_spec)
     |> sup.start_link
 
   let assert Ok(server) = process.receive(self, 100)
