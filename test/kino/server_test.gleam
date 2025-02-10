@@ -5,132 +5,161 @@ import gleam/otp/static_supervisor as sup
 import gleam/otp/system
 import gleam/result
 import gleeunit/should
-import kino/server.{type From, type InitResult, type Next, type Server}
-import logging
+import kino/server.{type Server}
 
-pub fn example_test() {
-  let assert Ok(srv) = start_link([], atom.create_from_string("example_test"))
-  server.cast(srv, Push("Joe"))
-  server.cast(srv, Push("Mike"))
-  server.cast(srv, Push("Robert"))
+pub fn get_state_test() {
+  let assert Ok(server) =
+    server.new(fn(state) { server.Ready(state) }, fn(_, _, state) {
+      server.continue(state)
+    })
+    |> server.start_link("Test state")
 
-  server.call(srv, Pop, 10) |> should.equal(Ok("Robert"))
-  server.call(srv, Pop, 10) |> should.equal(Ok("Mike"))
-  server.call(srv, Pop, 10) |> should.equal(Ok("Joe"))
-
-  // The stack is now empty, so if we pop again the actor replies with an error.
-  server.call(srv, Pop, 10) |> should.equal(Error(Nil))
-  server.stop(srv)
+  get_server_state(server)
+  |> should.equal(dynamic.from("Test state"))
 }
 
-pub fn unhandled_message_type_test() {
-  logging.set_level(logging.Error)
-  let assert Ok(srv) =
-    start_link([], atom.create_from_string("unhandled_message_type_test"))
-  let assert Ok(pid) = server.owner(srv)
-  raw_send(pid, "hello")
-  server.cast(srv, Push("Joe"))
-  server.call(srv, Pop, 10) |> should.equal(Ok("Joe"))
-  server.stop(srv)
-  logging.set_level(logging.Info)
+@external(erlang, "sys", "get_status")
+fn get_status(a: Pid) -> Dynamic
+
+pub fn get_status_test() {
+  let assert Ok(server) =
+    server.new(fn(state) { server.Ready(state) }, fn(_, _, state) {
+      server.continue(state)
+    })
+    |> server.start_link("Test state")
+
+  let assert Ok(pid) = server.owner(server)
+  get_status(pid)
+  // TODO: assert something about the response
 }
 
-pub fn restart_test() {
-  let self = process.new_subject()
-  let assert Ok(_) =
-    sup.new(sup.OneForOne)
-    |> sup.add(
-      sup.worker_child("stack-worker", fn() {
-        start_link([], atom.create_from_string("restart_test"))
-        |> server.to_supervise_result_ack(self)
-      }),
-    )
-    |> sup.start_link()
+pub fn failed_init_test() {
+  server.new(
+    fn(_) { server.Failed(dynamic.from("not enough wiggles")) },
+    fn(_, _, state) { server.continue(state) },
+  )
+  |> server.start_link("Test state")
+  |> result.is_error
+  |> should.be_true
+}
 
-  let assert Ok(srv) = process.receive(self, 100)
+pub fn suspend_resume_test() {
+  let assert Ok(server) =
+    server.new(fn(state) { server.Ready(state) }, fn(_, _, state) {
+      server.continue(state + 1)
+    })
+    |> server.start_link(0)
+  // Suspend process
+  let assert Ok(pid) = server.owner(server)
+  system.suspend(pid)
+  |> should.equal(Nil)
 
-  server.cast(srv, Push("Joe"))
-  server.cast(srv, Push("Mike"))
-  server.call(srv, Pop, 10) |> should.equal(Ok("Mike"))
+  // This normal message will not be handled yet so the state remains 0
+  server.cast(server, "hi")
 
-  // stop server
-  server.stop(srv)
+  // System messages are still handled
+  get_server_state(server)
+  |> should.equal(dynamic.from(0))
 
-  // wait for restart
-  process.sleep(100)
+  // Resume process
+  system.resume(pid)
+  |> should.equal(Nil)
 
-  server.cast(srv, Push("Robert"))
-  server.call(srv, Pop, 10) |> should.equal(Ok("Robert"))
-  // restart lost Joe
-  server.call(srv, Pop, 10) |> should.equal(Error(Nil))
+  // The queued regular message has been handled so the state has incremented
+  get_server_state(server)
+  |> should.equal(dynamic.from(1))
+}
+
+pub fn unexpected_message_test() {
+  // Quieten the logger
+  logger_set_primary_config(
+    atom.create_from_string("level"),
+    atom.create_from_string("error"),
+  )
+
+  let assert Ok(server) =
+    server.new(fn(state) { server.Ready(state) }, fn(_, req, _) {
+      server.continue(req)
+    })
+    |> server.start_link("state 1")
+
+  get_server_state(server)
+  |> should.equal(dynamic.from("state 1"))
+
+  let assert Ok(pid) = server.owner(server)
+
+  raw_send(pid, "Unexpected message 1")
+  server.cast(server, "state 2")
+  raw_send(pid, "Unexpected message 2")
+
+  get_server_state(server)
+  |> should.equal(dynamic.from("state 2"))
 }
 
 pub fn timeout_test() {
-  let assert Ok(srv) =
+  let assert Ok(server) =
     server.new(fn(args) { server.Timeout(args, 10) }, fn(_, _, state) {
       server.continue(state)
     })
     |> server.handle_timeout(fn(_) { server.continue("TIMEOUT") })
     |> server.start_link("hello")
 
-  let assert Ok(pid) = server.owner(srv)
-
-  get_state(pid) |> should.equal(dynamic.from("hello"))
+  get_server_state(server) |> should.equal(dynamic.from("hello"))
 
   process.sleep(10)
 
-  get_state(pid) |> should.equal(dynamic.from("TIMEOUT"))
+  get_server_state(server) |> should.equal(dynamic.from("TIMEOUT"))
 
-  server.stop(srv)
+  server.stop(server)
 }
 
-pub type Request(element) {
-  Push(element)
-  Pop(From(Result(element, Nil)))
+pub fn named_server_test() {
+  let self = process.new_subject()
+  let child_spec =
+    server.new(fn(state) { server.Ready(state) }, fn(_, req, _) {
+      server.continue(req)
+    })
+    |> server.name(atom.create_from_string("named_server_test"))
+    |> server.child_spec_ack
+
+  let assert Ok(_) =
+    sup.new(sup.OneForOne)
+    |> sup.add(sup.worker_child("worker", child_spec("state 1", self)))
+    |> sup.start_link
+
+  let assert Ok(server) = process.receive(self, 100)
+
+  get_server_state(server) |> should.equal(dynamic.from("state 1"))
+  server.cast(server, "state 2")
+  get_server_state(server) |> should.equal(dynamic.from("state 2"))
+
+  // stop server
+  server.stop(server)
+  // wait for restart
+  process.sleep(100)
+
+  // back to initial state
+  get_server_state(server) |> should.equal(dynamic.from("state 1"))
+  server.cast(server, "state 3")
+  get_server_state(server) |> should.equal(dynamic.from("state 3"))
 }
 
-pub fn start_link(
-  stack: List(element),
-  name: Atom,
-) -> Result(Server(Request(element)), Dynamic) {
-  server.new(init, handler)
-  |> server.name(name)
-  |> server.start_link(stack)
+fn get_server_state(server: Server(a)) {
+  let assert Ok(state) =
+    server.owner(server)
+    |> result.map(system.get_state)
+    |> result.try(first_element)
+    |> result.try(first_element)
+  state
 }
 
-fn init(stack: List(element)) -> InitResult(List(element)) {
-  server.Ready(stack)
-}
-
-fn handler(
-  _self: Server(request),
-  request: Request(element),
-  state: List(element),
-) -> Next(List(element)) {
-  case request {
-    Push(element) -> server.continue([element, ..state])
-
-    Pop(from) ->
-      case state {
-        [] -> {
-          server.reply(from, Error(Nil))
-          server.continue(state)
-        }
-        [first, ..rest] -> {
-          server.reply(from, Ok(first))
-          server.continue(rest)
-        }
-      }
-  }
+fn first_element(a: Dynamic) {
+  dynamic.element(1, dynamic.dynamic)(a)
+  |> result.replace_error(Nil)
 }
 
 @external(erlang, "erlang", "send")
 fn raw_send(a: Pid, b: anything) -> anything
 
-fn get_state(pid: Pid) {
-  let assert Ok(state) =
-    system.get_state(pid)
-    |> dynamic.element(1, dynamic.dynamic)
-    |> result.try(dynamic.element(1, dynamic.dynamic))
-  state
-}
+@external(erlang, "logger", "set_primary_config")
+fn logger_set_primary_config(a: Atom, b: Atom) -> Nil

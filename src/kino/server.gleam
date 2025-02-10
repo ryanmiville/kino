@@ -54,7 +54,7 @@ pub type Builder(args, request, state) {
 pub fn new(
   init init: fn(args) -> InitResult(state),
   handler handler: fn(Server(request), request, state) -> Next(state),
-) {
+) -> Builder(args, request, state) {
   Builder(
     init:,
     handler:,
@@ -123,6 +123,20 @@ pub fn owner(server: Server(request)) -> Result(Pid, Nil) {
   case server {
     PidRef(pid) -> Ok(pid)
     NameRef(name) -> process.named(name)
+  }
+}
+
+pub fn child_spec(
+  builder: Builder(args, request, state),
+) -> fn(args) -> fn() -> Result(Pid, Dynamic) {
+  fn(args) { fn() { start_link(builder, args) |> to_supervise_result } }
+}
+
+pub fn child_spec_ack(
+  builder: Builder(args, request, state),
+) -> fn(args, process.Subject(Server(request))) -> fn() -> Result(Pid, Dynamic) {
+  fn(args, ack) {
+    fn() { start_link(builder, args) |> to_supervise_result_ack(ack) }
   }
 }
 
