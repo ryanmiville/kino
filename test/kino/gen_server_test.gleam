@@ -5,14 +5,14 @@ import gleam/otp/static_supervisor as sup
 import gleam/otp/system
 import gleam/result
 import gleeunit/should
-import kino/server.{type Server}
+import kino/gen_server.{type GenServer}
 
 pub fn get_state_test() {
   let assert Ok(server) =
-    server.new(fn(state) { server.Ready(state) }, fn(_, _, state) {
-      server.continue(state)
+    gen_server.new(gen_server.Ready, fn(_, _, state) {
+      gen_server.continue(state)
     })
-    |> server.start_link("Test state")
+    |> gen_server.start_link("Test state")
 
   get_server_state(server)
   |> should.equal(dynamic.from("Test state"))
@@ -23,39 +23,39 @@ fn get_status(a: Pid) -> Dynamic
 
 pub fn get_status_test() {
   let assert Ok(server) =
-    server.new(fn(state) { server.Ready(state) }, fn(_, _, state) {
-      server.continue(state)
+    gen_server.new(gen_server.Ready, fn(_, _, state) {
+      gen_server.continue(state)
     })
-    |> server.start_link("Test state")
+    |> gen_server.start_link("Test state")
 
-  let assert Ok(pid) = server.owner(server)
+  let assert Ok(pid) = gen_server.owner(server)
   get_status(pid)
   // TODO: assert something about the response
 }
 
 pub fn failed_init_test() {
-  server.new(
-    fn(_) { server.Failed(dynamic.from("not enough wiggles")) },
-    fn(_, _, state) { server.continue(state) },
+  gen_server.new(
+    fn(_) { gen_server.Failed(dynamic.from("not enough wiggles")) },
+    fn(_, _, state) { gen_server.continue(state) },
   )
-  |> server.start_link("Test state")
+  |> gen_server.start_link("Test state")
   |> result.is_error
   |> should.be_true
 }
 
 pub fn suspend_resume_test() {
   let assert Ok(server) =
-    server.new(fn(state) { server.Ready(state) }, fn(_, _, state) {
-      server.continue(state + 1)
+    gen_server.new(gen_server.Ready, fn(_, _, state) {
+      gen_server.continue(state + 1)
     })
-    |> server.start_link(0)
+    |> gen_server.start_link(0)
   // Suspend process
-  let assert Ok(pid) = server.owner(server)
+  let assert Ok(pid) = gen_server.owner(server)
   system.suspend(pid)
   |> should.equal(Nil)
 
   // This normal message will not be handled yet so the state remains 0
-  server.cast(server, "hi")
+  gen_server.cast(server, "hi")
 
   // System messages are still handled
   get_server_state(server)
@@ -78,18 +78,16 @@ pub fn unexpected_message_test() {
   )
 
   let assert Ok(server) =
-    server.new(fn(state) { server.Ready(state) }, fn(_, req, _) {
-      server.continue(req)
-    })
-    |> server.start_link("state 1")
+    gen_server.new(gen_server.Ready, fn(_, req, _) { gen_server.continue(req) })
+    |> gen_server.start_link("state 1")
 
   get_server_state(server)
   |> should.equal(dynamic.from("state 1"))
 
-  let assert Ok(pid) = server.owner(server)
+  let assert Ok(pid) = gen_server.owner(server)
 
   raw_send(pid, "Unexpected message 1")
-  server.cast(server, "state 2")
+  gen_server.cast(server, "state 2")
   raw_send(pid, "Unexpected message 2")
 
   get_server_state(server)
@@ -98,11 +96,11 @@ pub fn unexpected_message_test() {
 
 pub fn timeout_test() {
   let assert Ok(server) =
-    server.new(fn(args) { server.Timeout(args, 10) }, fn(_, _, state) {
-      server.continue(state)
+    gen_server.new(gen_server.Timeout(_, 10), fn(_, _, state) {
+      gen_server.continue(state)
     })
-    |> server.handle_timeout(fn(_) { server.continue("TIMEOUT") })
-    |> server.start_link("hello")
+    |> gen_server.handle_timeout(fn(_) { gen_server.continue("TIMEOUT") })
+    |> gen_server.start_link("hello")
 
   get_server_state(server) |> should.equal(dynamic.from("hello"))
 
@@ -110,17 +108,15 @@ pub fn timeout_test() {
 
   get_server_state(server) |> should.equal(dynamic.from("TIMEOUT"))
 
-  server.stop(server)
+  gen_server.stop(server)
 }
 
 pub fn named_server_test() {
   let self = process.new_subject()
   let child_spec =
-    server.new(fn(state) { server.Ready(state) }, fn(_, req, _) {
-      server.continue(req)
-    })
-    |> server.name(atom.create_from_string("named_server_test"))
-    |> server.child_spec_ack("named_server_test", "state 1", self)
+    gen_server.new(gen_server.Ready, fn(_, req, _) { gen_server.continue(req) })
+    |> gen_server.name(atom.create_from_string("named_server_test"))
+    |> gen_server.child_spec_ack("named_server_test", "state 1", self)
 
   let assert Ok(_) =
     sup.new(sup.OneForOne)
@@ -130,23 +126,23 @@ pub fn named_server_test() {
   let assert Ok(server) = process.receive(self, 100)
 
   get_server_state(server) |> should.equal(dynamic.from("state 1"))
-  server.cast(server, "state 2")
+  gen_server.cast(server, "state 2")
   get_server_state(server) |> should.equal(dynamic.from("state 2"))
 
   // stop server
-  server.stop(server)
+  gen_server.stop(server)
   // wait for restart
   process.sleep(100)
 
   // back to initial state
   get_server_state(server) |> should.equal(dynamic.from("state 1"))
-  server.cast(server, "state 3")
+  gen_server.cast(server, "state 3")
   get_server_state(server) |> should.equal(dynamic.from("state 3"))
 }
 
-fn get_server_state(server: Server(a)) {
+fn get_server_state(server: GenServer(a)) {
   let assert Ok(state) =
-    server.owner(server)
+    gen_server.owner(server)
     |> result.map(system.get_state)
     |> result.try(first_element)
     |> result.try(first_element)
