@@ -33,13 +33,18 @@ type State(state, a) {
     buffer: Buffer(a),
     dispatcher: DemandDispatcher(a),
     consumers: Set(Subject(SinkMessage(a))),
-    pull: fn(state, Int) -> #(List(a), state),
+    pull: fn(state, Int) -> Produce(state, a),
   )
+}
+
+pub type Produce(state, a) {
+  Next(elements: List(a), state: state)
+  Done
 }
 
 pub fn new(
   state: state,
-  pull: fn(state, Int) -> #(List(a), state),
+  pull: fn(state, Int) -> Produce(state, a),
 ) -> Result(Source(a), Dynamic) {
   let ack = process.new_subject()
   actor.start_spec(actor.Spec(
@@ -107,10 +112,16 @@ fn take_from_buffer_or_pull(demand: Int, state: State(state, event)) {
       actor.continue(state)
     }
     #(demand, state) -> {
-      let #(events, new_state) = state.pull(state.state, demand)
-      let state = State(..state, state: new_state)
-      let state = dispatch_events(state, events, list.length(events))
-      actor.continue(state)
+      case state.pull(state.state, demand) {
+        Next(events, new_state) -> {
+          let state = State(..state, state: new_state)
+          let state = dispatch_events(state, events, list.length(events))
+          actor.continue(state)
+        }
+        Done -> {
+          actor.Stop(process.Normal)
+        }
+      }
     }
   }
 }

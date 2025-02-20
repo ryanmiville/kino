@@ -16,7 +16,7 @@ pub fn main() {
 fn handle_demand(counter: Int, demand: Int) {
   let mult = { { demand / 10 } + 1 } * 10
   let events = list.range(counter, counter + mult)
-  #(events, counter + mult)
+  source.Next(events, counter + mult)
 }
 
 fn handle_events(state, message: List(Int)) {
