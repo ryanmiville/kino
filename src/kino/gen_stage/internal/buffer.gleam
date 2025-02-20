@@ -1,7 +1,6 @@
 import gleam/bool
 import gleam/deque
 import gleam/list
-import gleam/option.{type Option, None, Some}
 
 pub type Buffer(event) {
   Buffer(queue: deque.Deque(event), counter: Int)
