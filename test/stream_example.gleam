@@ -15,12 +15,14 @@ pub fn main() {
 }
 
 fn handle_demand(counter: Int, demand: Int) {
-  let events = list.range(counter, counter + demand - 1)
-  #(events, counter + demand)
+  let mult = { { demand / 10 } + 1 } * 10
+  let events = list.range(counter, counter + mult)
+  #(events, counter + mult)
 }
 
 fn handle_events(state, message: List(Int)) {
   io.println("received events:")
   io.debug(message)
+  process.sleep(1000)
   actor.continue(state)
 }

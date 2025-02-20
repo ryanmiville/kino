@@ -99,7 +99,7 @@ fn dispatch_demand(
   }
 }
 
-fn split_events(events: List(event), length: Int, counter: Int) {
+pub fn split_events(events: List(event), length: Int, counter: Int) {
   case length <= counter {
     True -> #(events, [], 0, counter - length)
     False -> {

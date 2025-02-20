@@ -1,5 +1,6 @@
 import gleam/bool
 import gleam/deque
+import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 
@@ -12,6 +13,8 @@ pub fn new() -> Buffer(event) {
 }
 
 pub fn store(buffer: Buffer(event), events: List(event)) -> Buffer(event) {
+  // io.debug("buffer store")
+  // io.debug(events)
   case events {
     [] -> buffer
     [event, ..rest] ->
