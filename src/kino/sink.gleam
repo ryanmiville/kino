@@ -28,6 +28,13 @@ type State(state, event) {
   )
 }
 
+pub fn new_from(state: state, handle_events: fn(state, List(event)) -> state) {
+  let handle = fn(state, events) {
+    actor.continue(handle_events(state, events))
+  }
+  new(state, handle)
+}
+
 pub fn new(
   state: state,
   handle_events: fn(state, List(event)) -> actor.Next(List(event), state),

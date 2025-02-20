@@ -138,7 +138,6 @@ fn dispatch_events(state: State(state, event), events: List(event), length) {
   let #(events, dispatcher) = dispatch(state, events, length)
   let buffer = buffer.store(state.buffer, events)
   State(..state, buffer: buffer, dispatcher: dispatcher)
-  // I think there's more to do here
 }
 
 pub fn subscribe(
