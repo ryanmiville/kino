@@ -11,19 +11,22 @@ pub type Step(element, accumulator) {
   Stop
 }
 
-pub type Flow(a) {
+pub type ProducerConsumer(a) {
   Pull(emit: fn() -> Emit(a))
 }
 
-pub fn from_list(chunk: List(a)) -> Flow(a) {
+pub fn from_list(chunk: List(a)) -> ProducerConsumer(a) {
   Pull(fn() { Done(chunk) })
 }
 
-pub fn single(value: a) -> Flow(a) {
+pub fn single(value: a) -> ProducerConsumer(a) {
   from_list([value])
 }
 
-pub fn unfold_chunks(initial: state, f: fn(state) -> Step(a, state)) -> Flow(a) {
+pub fn unfold_chunks(
+  initial: state,
+  f: fn(state) -> Step(a, state),
+) -> ProducerConsumer(a) {
   do_unfold_chunks(initial, f) |> Pull
 }
 
@@ -39,12 +42,12 @@ fn do_unfold_chunks(
   }
 }
 
-pub fn unfold(initial: state, f: fn(state) -> Emit(a)) -> Flow(a) {
+pub fn unfold(initial: state, f: fn(state) -> Emit(a)) -> ProducerConsumer(a) {
   Pull(fn() { f(initial) })
 }
 
 pub fn fold_chunks(
-  flow: Flow(a),
+  flow: ProducerConsumer(a),
   initial: acc,
   f: fn(acc, List(a)) -> acc,
 ) -> acc {
@@ -66,12 +69,12 @@ fn do_fold_chunks(emit: Emit(a), acc: acc, f: fn(acc, List(a)) -> acc) {
   }
 }
 
-pub fn to_list(flow: Flow(a)) -> List(a) {
+pub fn to_list(flow: ProducerConsumer(a)) -> List(a) {
   to_chunks(flow)
   |> list.flatten
 }
 
-pub fn to_chunks(flow: Flow(a)) -> List(List(a)) {
+pub fn to_chunks(flow: ProducerConsumer(a)) -> List(List(a)) {
   let f = fn(acc, chunk) -> List(List(a)) { [chunk, ..acc] }
   fold_chunks(flow, [], f) |> list.reverse
 }

@@ -4,63 +4,43 @@ import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type ProcessMonitor, type Selector, type Subject}
 import gleam/function
 import gleam/int
-import gleam/io
+import gleam/string
+
+// import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
+import logging
 
+import kino/gen_stage.{
+  type ConsumerMessage, type Produce, type ProducerMessage, Ask, ConsumerDown,
+  ConsumerSubscribe, Done, NewEvents, Next, Subscribe, Unsubscribe,
+}
 import kino/gen_stage/internal/buffer.{type Buffer, Take}
 
-pub type Source(a) {
-  Source(subject: Subject(Message(a)))
-}
-
-pub type SourceMessage(a) =
-  Message(a)
-
-pub type Message(a) {
-  Ask(demand: Int, consumer: Subject(SinkMessage(a)))
-  Subscribe(consumer: Subject(SinkMessage(a)), demand: Int)
-  Unsubscribe(consumer: Subject(SinkMessage(a)))
-  ConsumerDown(consumer: Subject(SinkMessage(a)))
-}
-
-pub type FlowMessage(in, out) {
-  ConsumerMessage(SinkMessage(in))
-  ProducerMessage(SourceMessage(out))
-}
-
-pub type SinkMessage(a) {
-  NewEvents(events: List(a), from: Subject(Message(a)))
-  SinkSubscribe(source: Subject(Message(a)), min_demand: Int, max_demand: Int)
-  SinkUnsubscribe(source: Subject(Message(a)))
-  ProducerDown(producer: Subject(Message(a)))
+pub type Producer(a) {
+  Producer(subject: Subject(ProducerMessage(a)))
 }
 
 type State(state, a) {
   State(
-    self: Subject(Message(a)),
-    selector: Selector(Message(a)),
+    self: Subject(ProducerMessage(a)),
+    selector: Selector(ProducerMessage(a)),
     state: state,
     buffer: Buffer(a),
     dispatcher: DemandDispatcher(a),
-    consumers: Set(Subject(SinkMessage(a))),
-    monitors: Dict(Subject(SinkMessage(a)), ProcessMonitor),
+    consumers: Set(Subject(ConsumerMessage(a))),
+    monitors: Dict(Subject(ConsumerMessage(a)), ProcessMonitor),
     pull: fn(state, Int) -> Produce(state, a),
   )
-}
-
-pub type Produce(state, a) {
-  Next(elements: List(a), state: state)
-  Done
 }
 
 pub fn new(
   state: state,
   pull: fn(state, Int) -> Produce(state, a),
-) -> Result(Source(a), Dynamic) {
+) -> Result(Producer(a), Dynamic) {
   let ack = process.new_subject()
   actor.start_spec(actor.Spec(
     init: fn() {
@@ -87,12 +67,12 @@ pub fn new(
   ))
   |> result.map(fn(_) {
     let subject = process.receive_forever(ack)
-    Source(subject)
+    Producer(subject)
   })
   |> result.map_error(dynamic.from)
 }
 
-fn handler(message: Message(a), state: State(state, a)) {
+fn handler(message: ProducerMessage(a), state: State(state, a)) {
   case message {
     Subscribe(consumer, demand) -> {
       let consumers = set.insert(state.consumers, consumer)
@@ -111,7 +91,7 @@ fn handler(message: Message(a), state: State(state, a)) {
       ask_demand(demand, consumer, state)
     }
     Unsubscribe(consumer) -> {
-      io.println("unsub consumer")
+      logging.log(logging.Debug, "unsub consumer")
       let consumers = set.delete(state.consumers, consumer)
       let monitors = case dict.get(state.monitors, consumer) {
         Ok(mon) -> {
@@ -125,7 +105,7 @@ fn handler(message: Message(a), state: State(state, a)) {
       actor.continue(state)
     }
     ConsumerDown(consumer) -> {
-      io.println("consumer down")
+      logging.log(logging.Debug, "consumer down")
       let consumers = set.delete(state.consumers, consumer)
       let monitors = dict.delete(state.monitors, consumer)
       let dispatcher = cancel(state.dispatcher, consumer)
@@ -137,7 +117,7 @@ fn handler(message: Message(a), state: State(state, a)) {
 
 fn ask_demand(
   demand: Int,
-  consumer: Subject(SinkMessage(a)),
+  consumer: Subject(ConsumerMessage(a)),
   state: State(state, a),
 ) {
   ask_dispatcher(state.dispatcher, demand, consumer)
@@ -153,15 +133,14 @@ fn handle_dispatcher_result(
 }
 
 fn take_from_buffer_or_pull(demand: Int, state: State(state, event)) {
-  io.println("demand")
-  io.debug(demand)
+  logging.log(logging.Debug, "demand: " <> string.inspect(demand))
   case take_from_buffer(demand, state) {
     #(0, state) -> {
-      io.println("continue from take")
+      logging.log(logging.Debug, "continue from take")
       actor.continue(state)
     }
     #(demand, state) -> {
-      io.println("pulling")
+      logging.log(logging.Debug, "pulling")
       case state.pull(state.state, demand) {
         Next(events, new_state) -> {
           let state = State(..state, state: new_state)
@@ -169,7 +148,7 @@ fn take_from_buffer_or_pull(demand: Int, state: State(state, event)) {
           actor.continue(state)
         }
         Done -> {
-          io.println("called done")
+          logging.log(logging.Debug, "called done")
           actor.Stop(process.Normal)
         }
       }
@@ -203,11 +182,11 @@ fn dispatch_events(state: State(state, event), events: List(event), length) {
 }
 
 pub fn subscribe(
-  source: Source(a),
-  subject: Subject(SinkMessage(a)),
+  producer: Producer(a),
+  subject: Subject(ConsumerMessage(a)),
   demand: Int,
 ) {
-  process.send(subject, SinkSubscribe(source.subject, demand / 2, demand))
+  process.send(subject, ConsumerSubscribe(producer.subject, demand / 2, demand))
 }
 
 //
@@ -215,7 +194,7 @@ pub fn subscribe(
 //
 
 pub type Demand(event) =
-  #(Subject(SinkMessage(event)), Int)
+  #(Subject(ConsumerMessage(event)), Int)
 
 pub type DemandDispatcher(event) {
   DemandDispatcher(
@@ -231,7 +210,7 @@ pub fn new_dispatcher() -> DemandDispatcher(event) {
 
 pub fn subscribe_dispatcher(
   dispatcher: DemandDispatcher(event),
-  from: Subject(SinkMessage(event)),
+  from: Subject(ConsumerMessage(event)),
 ) {
   DemandDispatcher(
     demands: list.append(dispatcher.demands, [#(from, 0)]),
@@ -242,7 +221,7 @@ pub fn subscribe_dispatcher(
 
 pub fn cancel(
   dispatcher: DemandDispatcher(event),
-  from: Subject(SinkMessage(event)),
+  from: Subject(ConsumerMessage(event)),
 ) {
   case list.key_pop(dispatcher.demands, from) {
     Error(Nil) -> dispatcher
@@ -258,18 +237,19 @@ pub fn cancel(
 pub fn ask_dispatcher(
   dispatcher: DemandDispatcher(event),
   counter: Int,
-  from: Subject(SinkMessage(event)),
+  from: Subject(ConsumerMessage(event)),
 ) {
   let max = option.unwrap(dispatcher.max_demand, counter)
 
   case counter > max {
     True ->
-      io.println(
+      logging.log(
+        logging.Debug,
         "Dispatcher expects a max demand of "
-        <> int.to_string(max)
-        <> " but got demand for "
-        <> int.to_string(counter)
-        <> " events",
+          <> int.to_string(max)
+          <> " but got demand for "
+          <> int.to_string(counter)
+          <> " events",
       )
     _ -> Nil
   }
@@ -297,7 +277,7 @@ fn dispatch(state: State(state, event), events: List(event), length: Int) {
 
 fn dispatch_demand(
   demands: List(Demand(event)),
-  self: Subject(Message(event)),
+  self: Subject(ProducerMessage(event)),
   events: List(event),
   length: Int,
 ) {
@@ -326,7 +306,7 @@ pub fn split_events(events: List(event), length: Int, counter: Int) {
 
 fn add_demand(
   demands: List(Demand(event)),
-  from: Subject(SinkMessage(event)),
+  from: Subject(ConsumerMessage(event)),
   counter: Int,
 ) {
   case demands {

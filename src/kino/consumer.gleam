@@ -3,18 +3,22 @@ import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type ProcessMonitor, type Selector, type Subject}
 import gleam/function
-import gleam/io
+
+// import gleam/io
 import gleam/list
 import gleam/otp/actor
 import gleam/result
-import kino/source.{NewEvents, ProducerDown, SinkSubscribe, SinkUnsubscribe}
+import kino/gen_stage.{
+  ConsumerSubscribe, ConsumerUnsubscribe, NewEvents, ProducerDown,
+}
+import logging
 
-pub type Sink(event) {
-  Sink(subject: Subject(Message(event)))
+pub type Consumer(event) {
+  Consumer(subject: Subject(Message(event)))
 }
 
 type Message(event) =
-  source.SinkMessage(event)
+  gen_stage.ConsumerMessage(event)
 
 type Demand {
   Demand(current: Int, min: Int, max: Int)
@@ -27,8 +31,8 @@ type State(state, event) {
     state: state,
     handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
     on_shutdown: fn(state) -> Nil,
-    producers: Dict(Subject(source.Message(event)), Demand),
-    monitors: Dict(Subject(source.Message(event)), ProcessMonitor),
+    producers: Dict(Subject(gen_stage.ProducerMessage(event)), Demand),
+    monitors: Dict(Subject(gen_stage.ProducerMessage(event)), ProcessMonitor),
   )
 }
 
@@ -36,7 +40,7 @@ pub fn new_with_shutdown(
   state: state,
   handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
   on_shutdown: fn(state) -> Nil,
-) -> Result(Sink(event), Dynamic) {
+) -> Result(Consumer(event), Dynamic) {
   let ack = process.new_subject()
   actor.start_spec(actor.Spec(
     init: fn() {
@@ -62,7 +66,7 @@ pub fn new_with_shutdown(
   ))
   |> result.map(fn(_) {
     let subject = process.receive_forever(ack)
-    Sink(subject)
+    Consumer(subject)
   })
   |> result.map_error(dynamic.from)
 }
@@ -70,7 +74,7 @@ pub fn new_with_shutdown(
 pub fn new(
   state: state,
   handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
-) -> Result(Sink(event), Dynamic) {
+) -> Result(Consumer(event), Dynamic) {
   new_with_shutdown(state, handle_events, fn(_) { Nil })
 }
 
@@ -79,7 +83,7 @@ fn handler(
   state: State(state, event),
 ) -> actor.Next(Message(event), State(state, event)) {
   case message {
-    SinkSubscribe(source, min, max) -> {
+    ConsumerSubscribe(source, min, max) -> {
       let producers =
         dict.insert(state.producers, source, Demand(current: max, min:, max:))
       let mon = process.monitor_process(process.subject_owner(source))
@@ -90,7 +94,7 @@ fn handler(
 
       let monitors = state.monitors |> dict.insert(source, mon)
       let state = State(..state, selector:, producers:, monitors:)
-      process.send(source, source.Subscribe(state.self, max))
+      process.send(source, gen_stage.Subscribe(state.self, max))
       actor.continue(state) |> actor.with_selector(selector)
     }
     NewEvents(events:, from:) -> {
@@ -105,8 +109,8 @@ fn handler(
         Error(_) -> actor.continue(state)
       }
     }
-    SinkUnsubscribe(source) -> {
-      io.println("unsub producer")
+    ConsumerUnsubscribe(source) -> {
+      logging.log(logging.Debug, "unsub producer")
       let producers = dict.delete(state.producers, source)
       let monitors = case dict.get(state.monitors, source) {
         Ok(mon) -> {
@@ -116,7 +120,7 @@ fn handler(
         _ -> state.monitors
       }
       let state = State(..state, producers:, monitors:)
-      process.send(source, source.Unsubscribe(state.self))
+      process.send(source, gen_stage.Unsubscribe(state.self))
       case dict.is_empty(producers) {
         True -> {
           state.on_shutdown(state.state)
@@ -126,11 +130,10 @@ fn handler(
       }
     }
     ProducerDown(source) -> {
-      io.println("producer down")
+      logging.log(logging.Debug, "producer down")
       let producers = dict.delete(state.producers, source)
       let monitors = dict.delete(state.monitors, source)
       let state = State(..state, producers:, monitors:)
-      io.debug(producers)
       case dict.is_empty(producers) {
         True -> {
           state.on_shutdown(state.state)
@@ -149,7 +152,7 @@ type Batch(event) {
 fn dispatch(
   state: State(state, event),
   batches: List(Batch(event)),
-  from: Subject(source.Message(event)),
+  from: Subject(gen_stage.ProducerMessage(event)),
 ) -> actor.Next(Message(event), State(state, event)) {
   case batches {
     [] -> actor.continue(state)
@@ -157,7 +160,7 @@ fn dispatch(
       case state.handle_events(state.state, events) {
         actor.Continue(new_state, _) -> {
           let state = State(..state, state: new_state)
-          process.send(from, source.Ask(size, state.self))
+          process.send(from, gen_stage.Ask(size, state.self))
           dispatch(state, rest, from)
         }
         actor.Stop(reason) -> actor.Stop(reason)
