@@ -1,27 +1,43 @@
+import gleam/bool
 import gleam/erlang/process
 import gleam/io
 import gleam/list
-import gleam/otp/actor
-import kino/sink
-import kino/source
+import kino/stream
 
 pub fn main() {
-  let assert Ok(source) = source.new(1, handle_demand)
-  let assert Ok(sink) = sink.new(Nil, handle_events)
+  // let assert Ok(res) =
+  //   stream.unfold(from: 1, with: handle_demand)
+  //   |> stream.fold_chunks(from: "done!", with: handle_events, max: 1000)
+  // // |> stream.to_list
 
-  source.subscribe(source, sink.subject, 4)
-  process.sleep(10_000)
+  // io.println("done!")
+  // io.debug(res)
+
+  let assert Ok(list) =
+    [1, 2, 3, 4, 5]
+    |> stream.from_list
+    |> stream.fold_chunks(from: "done!", with: handle_events, max: 1000)
+  io.debug(list)
 }
 
 fn handle_demand(counter: Int, demand: Int) {
+  use <- bool.guard(counter > 20, stream.Done)
   let mult = { { demand / 10 } + 1 } * 10
-  let events = list.range(counter, counter + mult)
-  source.Next(events, counter + mult)
+  let events = list.range(counter, counter + mult - 1)
+  stream.Next(events, counter + mult)
 }
 
 fn handle_events(state, message: List(Int)) {
   io.println("received events:")
-  io.debug(message)
-  process.sleep(1000)
-  actor.continue(state)
+  case message {
+    [head, ..] if head > 100 -> {
+      io.println("should complete")
+      stream.Complete
+    }
+    _ -> {
+      io.debug(message)
+      process.sleep(500)
+      stream.Consume(state)
+    }
+  }
 }

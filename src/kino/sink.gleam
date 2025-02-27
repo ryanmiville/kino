@@ -1,12 +1,13 @@
 import gleam/bool
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type ProcessMonitor, type Selector, type Subject}
 import gleam/function
+import gleam/io
 import gleam/list
 import gleam/otp/actor
 import gleam/result
-import kino/source.{NewEvents, SinkSubscribe}
+import kino/source.{NewEvents, ProducerDown, SinkSubscribe, SinkUnsubscribe}
 
 pub type Sink(event) {
   Sink(subject: Subject(Message(event)))
@@ -22,22 +23,19 @@ type Demand {
 type State(state, event) {
   State(
     self: Subject(Message(event)),
+    selector: Selector(Message(event)),
     state: state,
     handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
+    on_shutdown: fn(state) -> Nil,
     producers: Dict(Subject(source.Message(event)), Demand),
+    monitors: Dict(Subject(source.Message(event)), ProcessMonitor),
   )
 }
 
-pub fn new_from(state: state, handle_events: fn(state, List(event)) -> state) {
-  let handle = fn(state, events) {
-    actor.continue(handle_events(state, events))
-  }
-  new(state, handle)
-}
-
-pub fn new(
+pub fn new_with_shutdown(
   state: state,
   handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
+  on_shutdown: fn(state) -> Nil,
 ) -> Result(Sink(event), Dynamic) {
   let ack = process.new_subject()
   actor.start_spec(actor.Spec(
@@ -47,7 +45,16 @@ pub fn new(
         process.new_selector()
         |> process.selecting(self, function.identity)
       process.send(ack, self)
-      let state = State(self:, state:, handle_events:, producers: dict.new())
+      let state =
+        State(
+          self:,
+          selector:,
+          state:,
+          handle_events: handle_events,
+          on_shutdown: on_shutdown,
+          producers: dict.new(),
+          monitors: dict.new(),
+        )
       actor.Ready(state, selector)
     },
     loop: handler,
@@ -60,6 +67,13 @@ pub fn new(
   |> result.map_error(dynamic.from)
 }
 
+pub fn new(
+  state: state,
+  handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
+) -> Result(Sink(event), Dynamic) {
+  new_with_shutdown(state, handle_events, fn(_) { Nil })
+}
+
 fn handler(
   message: Message(event),
   state: State(state, event),
@@ -68,9 +82,16 @@ fn handler(
     SinkSubscribe(source, min, max) -> {
       let producers =
         dict.insert(state.producers, source, Demand(current: max, min:, max:))
-      let state = State(..state, producers:)
+      let mon = process.monitor_process(process.subject_owner(source))
+      let selector =
+        process.new_selector()
+        |> process.selecting_process_down(mon, fn(_) { ProducerDown(source) })
+        |> process.merge_selector(state.selector)
+
+      let monitors = state.monitors |> dict.insert(source, mon)
+      let state = State(..state, selector:, producers:, monitors:)
       process.send(source, source.Subscribe(state.self, max))
-      actor.continue(state)
+      actor.continue(state) |> actor.with_selector(selector)
     }
     NewEvents(events:, from:) -> {
       case dict.get(state.producers, from) {
@@ -82,6 +103,40 @@ fn handler(
           dispatch(state, batches, from)
         }
         Error(_) -> actor.continue(state)
+      }
+    }
+    SinkUnsubscribe(source) -> {
+      io.println("unsub producer")
+      let producers = dict.delete(state.producers, source)
+      let monitors = case dict.get(state.monitors, source) {
+        Ok(mon) -> {
+          process.demonitor_process(mon)
+          dict.delete(state.monitors, source)
+        }
+        _ -> state.monitors
+      }
+      let state = State(..state, producers:, monitors:)
+      process.send(source, source.Unsubscribe(state.self))
+      case dict.is_empty(producers) {
+        True -> {
+          state.on_shutdown(state.state)
+          actor.Stop(process.Normal)
+        }
+        False -> actor.continue(state)
+      }
+    }
+    ProducerDown(source) -> {
+      io.println("producer down")
+      let producers = dict.delete(state.producers, source)
+      let monitors = dict.delete(state.monitors, source)
+      let state = State(..state, producers:, monitors:)
+      io.debug(producers)
+      case dict.is_empty(producers) {
+        True -> {
+          state.on_shutdown(state.state)
+          actor.Stop(process.Normal)
+        }
+        False -> actor.continue(state)
       }
     }
   }

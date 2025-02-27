@@ -1,6 +1,7 @@
 import gleam/bool
+import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type ProcessMonitor, type Selector, type Subject}
 import gleam/function
 import gleam/int
 import gleam/io
@@ -16,23 +17,37 @@ pub type Source(a) {
   Source(subject: Subject(Message(a)))
 }
 
+pub type SourceMessage(a) =
+  Message(a)
+
 pub type Message(a) {
   Ask(demand: Int, consumer: Subject(SinkMessage(a)))
   Subscribe(consumer: Subject(SinkMessage(a)), demand: Int)
+  Unsubscribe(consumer: Subject(SinkMessage(a)))
+  ConsumerDown(consumer: Subject(SinkMessage(a)))
+}
+
+pub type FlowMessage(in, out) {
+  ConsumerMessage(SinkMessage(in))
+  ProducerMessage(SourceMessage(out))
 }
 
 pub type SinkMessage(a) {
   NewEvents(events: List(a), from: Subject(Message(a)))
   SinkSubscribe(source: Subject(Message(a)), min_demand: Int, max_demand: Int)
+  SinkUnsubscribe(source: Subject(Message(a)))
+  ProducerDown(producer: Subject(Message(a)))
 }
 
 type State(state, a) {
   State(
     self: Subject(Message(a)),
+    selector: Selector(Message(a)),
     state: state,
     buffer: Buffer(a),
     dispatcher: DemandDispatcher(a),
     consumers: Set(Subject(SinkMessage(a))),
+    monitors: Dict(Subject(SinkMessage(a)), ProcessMonitor),
     pull: fn(state, Int) -> Produce(state, a),
   )
 }
@@ -57,10 +72,12 @@ pub fn new(
       let state =
         State(
           self: self,
+          selector: selector,
           state: state,
           buffer: buffer.new(),
           dispatcher: new_dispatcher(),
           consumers: set.new(),
+          monitors: dict.new(),
           pull: pull,
         )
       actor.Ready(state, selector)
@@ -79,12 +96,41 @@ fn handler(message: Message(a), state: State(state, a)) {
   case message {
     Subscribe(consumer, demand) -> {
       let consumers = set.insert(state.consumers, consumer)
+      let mon = process.monitor_process(process.subject_owner(consumer))
+      let selector =
+        process.new_selector()
+        |> process.selecting_process_down(mon, fn(_) { ConsumerDown(consumer) })
+        |> process.merge_selector(state.selector)
       process.send(state.self, Ask(demand, consumer))
       let dispatcher = subscribe_dispatcher(state.dispatcher, consumer)
-      actor.continue(State(..state, consumers:, dispatcher:))
+      let monitors = state.monitors |> dict.insert(consumer, mon)
+      let state = State(..state, selector:, consumers:, dispatcher:, monitors:)
+      actor.continue(state) |> actor.with_selector(selector)
     }
     Ask(demand:, consumer:) -> {
       ask_demand(demand, consumer, state)
+    }
+    Unsubscribe(consumer) -> {
+      io.println("unsub consumer")
+      let consumers = set.delete(state.consumers, consumer)
+      let monitors = case dict.get(state.monitors, consumer) {
+        Ok(mon) -> {
+          process.demonitor_process(mon)
+          dict.delete(state.monitors, consumer)
+        }
+        _ -> state.monitors
+      }
+      let dispatcher = cancel(state.dispatcher, consumer)
+      let state = State(..state, consumers:, dispatcher:, monitors:)
+      actor.continue(state)
+    }
+    ConsumerDown(consumer) -> {
+      io.println("consumer down")
+      let consumers = set.delete(state.consumers, consumer)
+      let monitors = dict.delete(state.monitors, consumer)
+      let dispatcher = cancel(state.dispatcher, consumer)
+      let state = State(..state, consumers:, dispatcher:, monitors:)
+      actor.continue(state)
     }
   }
 }
@@ -107,11 +153,15 @@ fn handle_dispatcher_result(
 }
 
 fn take_from_buffer_or_pull(demand: Int, state: State(state, event)) {
+  io.println("demand")
+  io.debug(demand)
   case take_from_buffer(demand, state) {
     #(0, state) -> {
+      io.println("continue from take")
       actor.continue(state)
     }
     #(demand, state) -> {
+      io.println("pulling")
       case state.pull(state.state, demand) {
         Next(events, new_state) -> {
           let state = State(..state, state: new_state)
@@ -119,6 +169,7 @@ fn take_from_buffer_or_pull(demand: Int, state: State(state, event)) {
           actor.continue(state)
         }
         Done -> {
+          io.println("called done")
           actor.Stop(process.Normal)
         }
       }

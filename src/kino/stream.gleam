@@ -1,6 +1,9 @@
 import gleam/dynamic.{type Dynamic}
+import gleam/erlang/process
+import gleam/list
+import gleam/otp/actor
 import gleam/result
-import kino/sink
+import kino/sink.{type Sink}
 import kino/source.{type Source, Source}
 
 const default_max_demand = 1000
@@ -18,6 +21,11 @@ pub opaque type Stream(element) {
 pub type Step(element, accumulator) {
   Next(elements: List(element), accumulator: accumulator)
   Done
+}
+
+pub type Consume(accumulator) {
+  Consume(accumulator)
+  Complete
 }
 
 pub fn unfold(
@@ -42,7 +50,7 @@ fn do_unfold(
 }
 
 pub fn repeatedly(f: fn() -> element) -> Stream(element) {
-  todo
+  unfold(Nil, fn(_, _) { Next([f()], Nil) })
 }
 
 pub fn repeat(x: element) -> Stream(element) {
@@ -50,18 +58,30 @@ pub fn repeat(x: element) -> Stream(element) {
 }
 
 pub fn from_list(list: List(element)) -> Stream(element) {
-  todo
+  let handler = fn(acc, _demand) {
+    case acc {
+      [] -> Done
+      _ -> Next(acc, [])
+    }
+  }
+  unfold(list, handler)
 }
 
 pub fn fold_chunks(
   over stream: Stream(element),
   from initial: acc,
-  with f: fn(acc, List(element)) -> acc,
+  with f: fn(acc, List(element)) -> Consume(acc),
+  max max_demand: Int,
 ) -> Result(acc, Dynamic) {
-  // use source <- result.try(source.new(todo, todo))
-  // use sink <- result.try(sink.new_from(initial, f))
-  // source.subscribe(source, sink.subject, default_max_demand)
-  todo
+  use source <- result.try(to_producer(stream))
+  use #(sink, ack) <- result.map(to_consumer(initial, f))
+  source.subscribe(source, sink.subject, max_demand)
+  process.receive_forever(ack)
+}
+
+pub fn to_list(stream: Stream(element)) -> Result(List(element), Dynamic) {
+  let handler = fn(acc, elements) { Consume(list.append(acc, elements)) }
+  fold_chunks(stream, [], handler, default_max_demand)
 }
 
 pub fn take(from stream: Stream(element), up_to desired: Int) -> Stream(element) {
@@ -171,4 +191,35 @@ pub fn interleave(
   with right: Stream(element),
 ) -> Stream(element) {
   todo
+}
+
+fn to_producer(stream: Stream(element)) -> Result(Source(element), Dynamic) {
+  let handle_demand = fn(continuation, demand) {
+    case continuation(demand) {
+      Continue(events, accumulator) -> {
+        source.Next(events, accumulator)
+      }
+      Stop -> {
+        source.Done
+      }
+    }
+  }
+  source.new(stream.continuation, handle_demand)
+}
+
+fn to_consumer(
+  initial: acc,
+  f: fn(acc, List(element)) -> Consume(acc),
+) -> Result(#(Sink(element), process.Subject(acc)), Dynamic) {
+  let handle_events = fn(state, events) {
+    case f(state, events) {
+      Consume(state) -> actor.continue(state)
+      Complete -> actor.Stop(process.Normal)
+    }
+  }
+  let ack = process.new_subject()
+  sink.new_with_shutdown(initial, handle_events, fn(state) {
+    process.send(ack, state)
+  })
+  |> result.map(fn(sink) { #(sink, ack) })
 }
