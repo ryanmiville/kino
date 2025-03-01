@@ -4,7 +4,6 @@ import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type ProcessMonitor, type Selector, type Subject}
 import gleam/function
 
-// import gleam/io
 import gleam/list
 import gleam/otp/actor
 import gleam/result
@@ -20,7 +19,7 @@ pub type Consumer(event) {
 type Message(event) =
   gen_stage.ConsumerMessage(event)
 
-type Demand {
+pub type Demand {
   Demand(current: Int, min: Int, max: Int)
 }
 
@@ -145,7 +144,7 @@ fn handler(
   }
 }
 
-type Batch(event) {
+pub type Batch(event) {
   Batch(events: List(event), size: Int)
 }
 

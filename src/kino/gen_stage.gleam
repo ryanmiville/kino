@@ -4,15 +4,12 @@ import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type ProcessMonitor, type Selector, type Subject}
 import gleam/function
 import gleam/int
-import gleam/string
-
-// import gleam/io
+import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
-import logging
 
 import kino/gen_stage/internal/buffer.{type Buffer, Take}
 
@@ -115,7 +112,7 @@ fn handler(message: ProducerMessage(a), state: State(state, a)) {
       ask_demand(demand, consumer, state)
     }
     Unsubscribe(consumer) -> {
-      logging.log(logging.Debug, "unsub consumer")
+      io.println("unsub consumer")
       let consumers = set.delete(state.consumers, consumer)
       let monitors = case dict.get(state.monitors, consumer) {
         Ok(mon) -> {
@@ -129,7 +126,7 @@ fn handler(message: ProducerMessage(a), state: State(state, a)) {
       actor.continue(state)
     }
     ConsumerDown(consumer) -> {
-      logging.log(logging.Debug, "consumer down")
+      io.println("consumer down")
       let consumers = set.delete(state.consumers, consumer)
       let monitors = dict.delete(state.monitors, consumer)
       let dispatcher = cancel(state.dispatcher, consumer)
@@ -157,14 +154,15 @@ fn handle_dispatcher_result(
 }
 
 fn take_from_buffer_or_pull(demand: Int, state: State(state, event)) {
-  logging.log(logging.Debug, "demand: " <> string.inspect(demand))
+  io.println("demand")
+  io.debug(demand)
   case take_from_buffer(demand, state) {
     #(0, state) -> {
-      logging.log(logging.Debug, "continue from take")
+      io.println("continue from take")
       actor.continue(state)
     }
     #(demand, state) -> {
-      logging.log(logging.Debug, "pulling")
+      io.println("pulling")
       case state.pull(state.state, demand) {
         Next(events, new_state) -> {
           let state = State(..state, state: new_state)
@@ -172,7 +170,7 @@ fn take_from_buffer_or_pull(demand: Int, state: State(state, event)) {
           actor.continue(state)
         }
         Done -> {
-          logging.log(logging.Debug, "called done")
+          io.println("called done")
           actor.Stop(process.Normal)
         }
       }
@@ -185,7 +183,8 @@ fn take_from_buffer(demand: Int, state: State(state, event)) {
   case events {
     [] -> #(demand, state)
     _ -> {
-      let #(events, dispatcher) = dispatch(state, events, demand - demand_left)
+      let #(events, dispatcher) =
+        dispatch(state.dispatcher, state.self, events, demand - demand_left)
       let buffer = buffer.store(buffer, events)
       let state = State(..state, buffer: buffer, dispatcher: dispatcher)
       take_from_buffer(demand_left, state)
@@ -200,31 +199,25 @@ fn dispatch_events(state: State(state, event), events: List(event), length) {
     State(..state, buffer:)
   })
 
-  let #(events, dispatcher) = dispatch(state, events, length)
+  let #(events, dispatcher) =
+    dispatch(state.dispatcher, state.self, events, length)
   let buffer = buffer.store(state.buffer, events)
   State(..state, buffer: buffer, dispatcher: dispatcher)
 }
 
 pub fn subscribe(
-  producer: Producer(a),
-  subject: Subject(ConsumerMessage(a)),
+  producer: Subject(ProducerMessage(a)),
+  consumer: Subject(ConsumerMessage(a)),
   demand: Int,
 ) {
-  process.send(subject, ConsumerSubscribe(producer.subject, demand / 2, demand))
+  process.send(consumer, ConsumerSubscribe(producer, demand / 2, demand))
 }
 
-consumer) -> {
-      logging.log(logging.Debug, "consumer down")
-      let consumers = set.delete(state.consumers, consumer)
-      let monitors = dict.delete(state.monitors, consumer)
-      let dispatcher = cancel(state.dispatcher, consumer)
-      let state = State(..state, consumers:, dispatcher:, monitors:)
-      actor.continue(state)
-    }
-  }
-}
+//
+// Dispatcher
+//
 
-b type Demand(event) =
+pub type Demand(event) =
   #(Subject(ConsumerMessage(event)), Int)
 
 pub type DemandDispatcher(event) {
@@ -274,13 +267,12 @@ pub fn ask_dispatcher(
 
   case counter > max {
     True ->
-      logging.log(
-        logging.Debug,
+      io.println(
         "Dispatcher expects a max demand of "
-          <> int.to_string(max)
-          <> " but got demand for "
-          <> int.to_string(counter)
-          <> " events",
+        <> int.to_string(max)
+        <> " but got demand for "
+        <> int.to_string(counter)
+        <> " events",
       )
     _ -> Nil
   }
@@ -300,10 +292,15 @@ pub fn ask_dispatcher(
   #(counter - already_sent, dispatcher)
 }
 
-fn dispatch(state: State(state, event), events: List(event), length: Int) {
-  let #(events,  =
-    dispatch_demand(state.dispatcher.demands, state.self, events, length)
-  #(events, DemandDispatcher(..state.dispatcher, demands:))
+pub fn dispatch(
+  dispatcher: DemandDispatcher(event),
+  self: Subject(ProducerMessage(event)),
+  events: List(event),
+  length: Int,
+) {
+  let #(events, demands) =
+    dispatch_demand(dispatcher.demands, self, events, length)
+  #(events, DemandDispatcher(..dispatcher, demands:))
 }
 
 fn dispatch_demand(
