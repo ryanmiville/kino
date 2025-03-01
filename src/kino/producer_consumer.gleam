@@ -156,7 +156,8 @@ fn producer_handler(message: ProducerMessage(out), state: State(state, in, out))
       let counter = counter + demand
       let state = State(..state, dispatcher:, events: Events(queue, counter))
 
-      let #(_, state) = take_from_buffer(counter, state)
+      let #(from_buffer, state) = take_from_buffer(counter, state)
+      logging.log(logging.Debug, "from_buffer: " <> string.inspect(from_buffer))
       let Events(queue, demand) = state.events
       take_events(queue, demand, state)
     }
@@ -235,6 +236,7 @@ fn dispatch_events(state: State(state, in, out), events: List(out), length: Int)
     let buffer = buffer.store(state.buffer, events)
     State(..state, buffer:)
   })
+  // logging.log(logging.Debug, "dispatch_events: " <> string.inspect(events))
   let #(events, dispatcher) =
     gen_stage.dispatch(state.dispatcher, state.producer_self, events, length)
 
@@ -386,15 +388,15 @@ fn take_from_buffer(
   case events {
     [] -> #(demand, state)
     _ -> {
-      let #(events, dispatcher) =
-        gen_stage.dispatch(
-          state.dispatcher,
-          state.producer_self,
-          events,
-          demand - demand_left,
-        )
-      let buffer = buffer.store(buffer, events)
-      let state = State(..state, buffer: buffer, dispatcher: dispatcher)
+      let state = dispatch_events(state, events, demand - demand_left)
+      // gen_stage.dispatch(
+      //   state.dispatcher,
+      //   state.producer_self,
+      //   events,
+      //   demand - demand_left,
+      // )
+      // let buffer = buffer.store(buffer, events)
+      // let state = State(..state, buffer: buffer, dispatcher: dispatcher)
       take_from_buffer(demand_left, state)
     }
   }

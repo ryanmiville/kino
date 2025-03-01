@@ -16,8 +16,12 @@ pub fn main() {
   let assert Ok(producer_consumer) = producer_consumer()
   let assert Ok(consumer) = consumer()
 
-  gen_stage.subscribe(producer_consumer.producer_subject, consumer.subject, 8)
-  gen_stage.subscribe(producer.subject, producer_consumer.consumer_subject, 6)
+  consumer.subject
+  |> gen_stage.subscribe(producer_consumer.producer_subject, 10)
+
+  producer_consumer.consumer_subject
+  |> gen_stage.subscribe(producer.subject, 20)
+
   process.sleep(5000)
 }
 

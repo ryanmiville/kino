@@ -206,9 +206,9 @@ fn dispatch_events(state: State(state, event), events: List(event), length) {
 }
 
 pub fn subscribe(
-  producer: Subject(ProducerMessage(a)),
-  consumer: Subject(ConsumerMessage(a)),
-  demand: Int,
+  consumer consumer: Subject(ConsumerMessage(a)),
+  to producer: Subject(ProducerMessage(a)),
+  with_max_demand demand: Int,
 ) {
   process.send(consumer, ConsumerSubscribe(producer, demand / 2, demand))
 }
