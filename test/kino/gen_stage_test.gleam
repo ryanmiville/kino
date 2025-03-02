@@ -29,7 +29,7 @@ fn forwarder(receiver: process.Subject(List(Int))) -> consumer.Consumer(Int) {
   consumer
 }
 
-fn print_forwarder(
+pub fn print_forwarder(
   receiver: process.Subject(List(Int)),
 ) -> consumer.Consumer(Int) {
   let assert Ok(consumer) =
@@ -56,16 +56,27 @@ fn doubler(
   producer_consumer
 }
 
-fn postponer(
+fn pass_through(
   receiver: process.Subject(List(Int)),
 ) -> producer_consumer.ProducerConsumer(Int, Int) {
   let assert Ok(producer_consumer) =
     producer_consumer.new(0, fn(state, events) {
       process.send(receiver, events)
-      Next([], state)
+      Next(events, state)
     })
   producer_consumer
 }
+
+// fn postponer(
+//   receiver: process.Subject(List(Int)),
+// ) -> producer_consumer.ProducerConsumer(Int, Int) {
+//   let assert Ok(producer_consumer) =
+//     producer_consumer.new(0, fn(state, events) {
+//       process.send(receiver, events)
+//       Next([], state)
+//     })
+//   producer_consumer
+// }
 
 fn sleeper(receiver: process.Subject(List(Int))) -> consumer.Consumer(Int) {
   let assert Ok(consumer) =
@@ -387,24 +398,24 @@ pub fn producer_to_producer_consumer_to_consumer_20_percent_min_demand_late_subs
 pub fn producer_to_producer_consumer_to_consumer_stops_asking_when_consumer_stops_asking_test() {
   let prod = counter(0)
 
-  let postponer_subject = process.new_subject()
-  let postponer = postponer(postponer_subject)
+  let pass_through_subject = process.new_subject()
+  let pass_through = pass_through(pass_through_subject)
 
   let sleeper_subject = process.new_subject()
   let sleeper = sleeper(sleeper_subject)
 
-  postponer.consumer_subject |> gen_stage.subscribe(prod.subject, 8, 10)
+  pass_through.consumer_subject |> gen_stage.subscribe(prod.subject, 8, 10)
 
-  sleeper.subject |> gen_stage.subscribe(postponer.producer_subject, 5, 10)
+  sleeper.subject |> gen_stage.subscribe(pass_through.producer_subject, 5, 10)
 
-  assert_received(postponer_subject, [0, 1])
+  assert_received(pass_through_subject, [0, 1])
   assert_received(sleeper_subject, [0, 1])
-  // assert_received(postponer_subject, [2, 3])
-  // assert_received(postponer_subject, [4, 5])
-  // assert_received(postponer_subject, [6, 7])
-  // assert_received(postponer_subject, [8, 9])
-  // assert_not_received(sleeper_subject, [2, 3])
-  // assert_not_received(postponer_subject, [10, 11])
+  assert_received(pass_through_subject, [2, 3])
+  assert_received(pass_through_subject, [4, 5])
+  assert_received(pass_through_subject, [6, 7])
+  assert_received(pass_through_subject, [8, 9])
+  assert_not_received(sleeper_subject, [2, 3])
+  assert_not_received(pass_through_subject, [10, 11])
 }
 
 fn doubled_range(start: Int, end: Int) -> List(Int) {
