@@ -390,14 +390,6 @@ fn take_from_buffer(
     _ -> {
       let state =
         dispatch_events(State(..state, buffer:), events, demand - demand_left)
-      // gen_stage.dispatch(
-      //   state.dispatcher,
-      //   state.producer_self,
-      //   events,
-      //   demand - demand_left,
-      // )
-      // let buffer = buffer.store(buffer, events)
-      // let state = State(..state, buffer: buffer, dispatcher: dispatcher)
       take_from_buffer(demand_left, state)
     }
   }
