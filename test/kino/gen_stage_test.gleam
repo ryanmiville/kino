@@ -68,7 +68,6 @@ pub fn producer_multiple_consumers_test() {
       process.receive(events_subject1, 100),
     ]
     |> result.values
-    |> io.debug
     |> list.flatten
 
   let events2 =
@@ -77,7 +76,6 @@ pub fn producer_multiple_consumers_test() {
       process.receive(events_subject2, 100),
     ]
     |> result.values
-    |> io.debug
     |> list.flatten
 
   list.append(events1, events2)
@@ -110,4 +108,19 @@ pub fn producer_done_test() {
 
   process.receive(events_subject, 100)
   |> should.equal(Error(Nil))
+}
+
+pub fn producer_consumer_default_demand_test() {
+  let prod = counter(0)
+
+  let events_subject = process.new_subject()
+  let consumer = forwarder(events_subject)
+
+  consumer.subject |> gen_stage.subscribe(prod.subject, 500, 1000)
+
+  let batch = list.range(0, 499)
+  assert_received(events_subject, batch)
+
+  let batch = list.range(500, 999)
+  assert_received(events_subject, batch)
 }
