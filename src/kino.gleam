@@ -17,10 +17,10 @@ pub fn main() {
   let assert Ok(consumer) = consumer()
 
   consumer.subject
-  |> gen_stage.subscribe(producer_consumer.producer_subject, 10)
+  |> gen_stage.subscribe(producer_consumer.producer_subject, 9)
 
   producer_consumer.consumer_subject
-  |> gen_stage.subscribe(producer.subject, 20)
+  |> gen_stage.subscribe(producer.subject, 13)
 
   process.sleep(5000)
 }

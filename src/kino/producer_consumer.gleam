@@ -388,7 +388,8 @@ fn take_from_buffer(
   case events {
     [] -> #(demand, state)
     _ -> {
-      let state = dispatch_events(state, events, demand - demand_left)
+      let state =
+        dispatch_events(State(..state, buffer:), events, demand - demand_left)
       // gen_stage.dispatch(
       //   state.dispatcher,
       //   state.producer_self,
