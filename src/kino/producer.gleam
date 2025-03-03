@@ -14,7 +14,7 @@ import logging
 
 import kino/gen_stage.{
   type ConsumerMessage, type Produce, type ProducerMessage, Ask, ConsumerDown,
-  ConsumerSubscribe, Done, NewEvents, Next, Subscribe, Unsubscribe,
+  Done, NewEvents, Next, Subscribe, Unsubscribe,
 }
 import kino/gen_stage/internal/buffer.{type Buffer, Take}
 
@@ -52,7 +52,7 @@ pub fn new(
           self: self,
           selector: selector,
           state: state,
-          buffer: buffer.new(),
+          buffer: buffer.new() |> buffer.capacity(10_000),
           dispatcher: new_dispatcher(),
           consumers: set.new(),
           monitors: dict.new(),
@@ -177,14 +177,6 @@ fn dispatch_events(state: State(state, event), events: List(event), length) {
   let #(events, dispatcher) = dispatch(state, events, length)
   let buffer = buffer.store(state.buffer, events)
   State(..state, buffer: buffer, dispatcher: dispatcher)
-}
-
-pub fn subscribe(
-  producer: Producer(a),
-  subject: Subject(ConsumerMessage(a)),
-  demand: Int,
-) {
-  process.send(subject, ConsumerSubscribe(producer.subject, demand / 2, demand))
 }
 
 //

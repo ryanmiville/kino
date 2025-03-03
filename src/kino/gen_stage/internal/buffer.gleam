@@ -1,23 +1,73 @@
 import gleam/bool
 import gleam/deque
 import gleam/list
+import gleam/option.{type Option, None, Some}
+
+pub type Keep {
+  First
+  Last
+}
 
 pub type Buffer(event) {
-  Buffer(queue: deque.Deque(event), counter: Int)
+  Buffer(
+    queue: deque.Deque(event),
+    counter: Int,
+    keep: Keep,
+    capacity: Option(Int),
+  )
 }
 
 pub fn new() -> Buffer(event) {
-  Buffer(deque.new(), 0)
+  Buffer(deque.new(), 0, Last, None)
+}
+
+pub fn keep(buffer: Buffer(event), keep: Keep) -> Buffer(event) {
+  Buffer(..buffer, keep: keep)
+}
+
+pub fn capacity(buffer: Buffer(event), capacity: Int) -> Buffer(event) {
+  use <- bool.guard(capacity <= 0, buffer)
+  Buffer(..buffer, capacity: Some(capacity))
 }
 
 pub fn store(buffer: Buffer(event), events: List(event)) -> Buffer(event) {
+  use <- bool.lazy_guard(at_capacity(buffer), fn() {
+    store_at_capacity(buffer, events)
+  })
+
   case events {
     [] -> buffer
     [event, ..rest] ->
       store(
-        Buffer(deque.push_back(buffer.queue, event), buffer.counter + 1),
+        Buffer(
+          ..buffer,
+          queue: deque.push_back(buffer.queue, event),
+          counter: buffer.counter + 1,
+        ),
         rest,
       )
+  }
+}
+
+fn at_capacity(buffer: Buffer(event)) -> Bool {
+  case buffer.capacity {
+    None -> False
+    Some(capacity) -> buffer.counter > capacity
+  }
+}
+
+fn store_at_capacity(
+  buffer: Buffer(event),
+  events: List(event),
+) -> Buffer(event) {
+  let popped = case buffer.keep {
+    First -> deque.pop_back(buffer.queue)
+    Last -> deque.pop_front(buffer.queue)
+  }
+  case popped {
+    Error(Nil) -> buffer
+    Ok(#(_, queue)) ->
+      store(Buffer(..buffer, queue:, counter: buffer.counter - 1), events)
   }
 }
 
@@ -50,7 +100,7 @@ fn do_take(
       do_take(
         counter - 1,
         [event, ..events],
-        Buffer(queue: queue, counter: buffer.counter - 1),
+        Buffer(..buffer, queue: queue, counter: buffer.counter - 1),
       )
   }
 }

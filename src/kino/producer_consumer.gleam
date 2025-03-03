@@ -236,7 +236,7 @@ fn dispatch_events(state: State(state, in, out), events: List(out), length: Int)
     let buffer = buffer.store(state.buffer, events)
     State(..state, buffer:)
   })
-  // logging.log(logging.Debug, "dispatch_events: " <> string.inspect(events))
+  logging.log(logging.Debug, "dispatch_events: " <> string.inspect(events))
   let #(events, dispatcher) =
     gen_stage.dispatch(state.dispatcher, state.producer_self, events, length)
 
@@ -313,7 +313,7 @@ fn dispatch(
       case state.handle_events(state.state, events) {
         gen_stage.Next(events, new_state) -> {
           let state = State(..state, state: new_state)
-          let state = dispatch_events(state, events, size)
+          let state = dispatch_events(state, events, list.length(events))
           process.send(from, gen_stage.Ask(size, state.consumer_self))
           dispatch(state, rest, from)
         }
