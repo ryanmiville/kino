@@ -165,7 +165,7 @@ fn dispatch(
   }
 }
 
-fn split_batches(
+pub fn split_batches(
   events: List(event),
   demand: Demand,
 ) -> #(Int, List(Batch(event))) {
