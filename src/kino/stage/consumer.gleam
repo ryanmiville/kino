@@ -7,7 +7,7 @@ import gleam/function
 import gleam/list
 import gleam/otp/actor
 import gleam/result
-import kino/gen_stage.{
+import kino/stage.{
   ConsumerSubscribe, ConsumerUnsubscribe, NewEvents, ProducerDown,
 }
 import logging
@@ -17,7 +17,7 @@ pub type Consumer(event) {
 }
 
 type Message(event) =
-  gen_stage.ConsumerMessage(event)
+  stage.ConsumerMessage(event)
 
 pub type Demand {
   Demand(current: Int, min: Int, max: Int)
@@ -30,8 +30,8 @@ type State(state, event) {
     state: state,
     handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
     on_shutdown: fn(state) -> Nil,
-    producers: Dict(Subject(gen_stage.ProducerMessage(event)), Demand),
-    monitors: Dict(Subject(gen_stage.ProducerMessage(event)), ProcessMonitor),
+    producers: Dict(Subject(stage.ProducerMessage(event)), Demand),
+    monitors: Dict(Subject(stage.ProducerMessage(event)), ProcessMonitor),
   )
 }
 
@@ -93,7 +93,7 @@ fn handler(
 
       let monitors = state.monitors |> dict.insert(source, mon)
       let state = State(..state, selector:, producers:, monitors:)
-      process.send(source, gen_stage.Subscribe(state.self, max))
+      process.send(source, stage.Subscribe(state.self, max))
       actor.continue(state) |> actor.with_selector(selector)
     }
     NewEvents(events:, from:) -> {
@@ -119,7 +119,7 @@ fn handler(
         _ -> state.monitors
       }
       let state = State(..state, producers:, monitors:)
-      process.send(source, gen_stage.Unsubscribe(state.self))
+      process.send(source, stage.Unsubscribe(state.self))
       case dict.is_empty(producers) {
         True -> {
           state.on_shutdown(state.state)
@@ -151,7 +151,7 @@ pub type Batch(event) {
 fn dispatch(
   state: State(state, event),
   batches: List(Batch(event)),
-  from: Subject(gen_stage.ProducerMessage(event)),
+  from: Subject(stage.ProducerMessage(event)),
 ) -> actor.Next(Message(event), State(state, event)) {
   case batches {
     [] -> actor.continue(state)
@@ -159,7 +159,7 @@ fn dispatch(
       case state.handle_events(state.state, events) {
         actor.Continue(new_state, _) -> {
           let state = State(..state, state: new_state)
-          process.send(from, gen_stage.Ask(size, state.self))
+          process.send(from, stage.Ask(size, state.self))
           dispatch(state, rest, from)
         }
         actor.Stop(reason) -> actor.Stop(reason)

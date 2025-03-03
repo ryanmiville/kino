@@ -12,11 +12,11 @@ import gleam/set.{type Set}
 
 import logging
 
-import kino/gen_stage.{
+import kino/stage.{
   type ConsumerMessage, type Produce, type ProducerMessage, Ask, ConsumerDown,
   Done, NewEvents, Next, Subscribe, Unsubscribe,
 }
-import kino/gen_stage/internal/buffer.{type Buffer, Take}
+import kino/stage/internal/buffer.{type Buffer, Take}
 
 pub type Producer(a) {
   Producer(subject: Subject(ProducerMessage(a)))
