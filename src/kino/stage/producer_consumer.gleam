@@ -190,7 +190,7 @@ fn consumer_handler(message: ConsumerMessage(in), state: State(state, in, out)) 
       actor.continue(state) |> actor.with_selector(selector)
     }
     stage.NewEvents(events, from) -> {
-      let queue = put_events(events, from, state.events.queue)
+      let queue = deque.push_back(state.events.queue, #(events, from))
       take_events(queue, state.events.demand, state)
     }
     stage.ConsumerUnsubscribe(source) -> {
@@ -258,10 +258,6 @@ fn take_events(
       actor.continue(State(..stage, events: Events(queue, counter)))
     }
   }
-}
-
-fn put_events(events, from, queue) {
-  deque.push_back(queue, #(events, from))
 }
 
 fn send_events(

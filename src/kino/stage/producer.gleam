@@ -9,9 +9,9 @@ import gleam/result
 import gleam/set.{type Set}
 
 import kino/stage.{
-  type ConsumerMessage, type Demand, type DemandDispatcher, type Produce,
-  type ProducerMessage, Ask, ConsumerDown, DemandDispatcher, Done, NewEvents,
-  Next, Subscribe, Unsubscribe,
+  type ConsumerMessage, type DemandDispatcher, type Produce,
+  type ProducerMessage, Ask, ConsumerDown, DemandDispatcher, Done, Next,
+  Subscribe, Unsubscribe,
 }
 import kino/stage/internal/buffer.{type Buffer, Take}
 
@@ -175,45 +175,4 @@ fn dispatch_events(state: State(state, event), events: List(event), length) {
     stage.dispatch(state.dispatcher, state.self, events, length)
   let buffer = buffer.store(state.buffer, events)
   State(..state, buffer: buffer, dispatcher: dispatcher)
-}
-
-fn dispatch_demand(
-  demands: List(Demand(event)),
-  self: Subject(ProducerMessage(event)),
-  events: List(event),
-  length: Int,
-) {
-  use <- bool.guard(events == [], #(events, demands))
-
-  case demands {
-    [] | [#(_, 0), ..] -> #(events, demands)
-    [#(from, counter), ..rest] -> {
-      let #(now, later, length, counter) = split_events(events, length, counter)
-      process.send(from, NewEvents(now, self))
-      let demands = add_demand(rest, from, counter)
-      dispatch_demand(demands, self, later, length)
-    }
-  }
-}
-
-pub fn split_events(events: List(event), length: Int, counter: Int) {
-  case length <= counter {
-    True -> #(events, [], 0, counter - length)
-    False -> {
-      let #(now, later) = list.split(events, counter)
-      #(now, later, length - counter, 0)
-    }
-  }
-}
-
-fn add_demand(
-  demands: List(Demand(event)),
-  from: Subject(ConsumerMessage(event)),
-  counter: Int,
-) {
-  case demands {
-    [] -> [#(from, counter)]
-    [#(_, current), ..] if counter > current -> [#(from, counter), ..demands]
-    [demand, ..rest] -> [demand, ..add_demand(rest, from, counter)]
-  }
 }
