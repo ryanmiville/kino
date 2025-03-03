@@ -9,11 +9,11 @@ import gleam/result
 import gleam/set.{type Set}
 
 import kino/stage.{
-  type ConsumerMessage, type DemandDispatcher, type Produce,
-  type ProducerMessage, Ask, ConsumerDown, DemandDispatcher, Done, Next,
-  Subscribe, Unsubscribe,
+  type ConsumerMessage, type Produce, type ProducerMessage, Ask, ConsumerDown,
+  Done, Next, Subscribe, Unsubscribe,
 }
 import kino/stage/internal/buffer.{type Buffer, Take}
+import kino/stage/internal/dispatcher.{type DemandDispatcher, DemandDispatcher}
 
 pub type Producer(a) {
   Producer(subject: Subject(ProducerMessage(a)))
@@ -50,7 +50,7 @@ pub fn new(
           selector: selector,
           state: state,
           buffer: buffer.new() |> buffer.capacity(10_000),
-          dispatcher: stage.new_dispatcher(),
+          dispatcher: dispatcher.new(),
           consumers: set.new(),
           monitors: dict.new(),
           pull: pull,
@@ -77,7 +77,7 @@ fn handler(message: ProducerMessage(a), state: State(state, a)) {
         |> process.selecting_process_down(mon, fn(_) { ConsumerDown(consumer) })
         |> process.merge_selector(state.selector)
       process.send(state.self, Ask(demand, consumer))
-      let dispatcher = stage.subscribe_dispatcher(state.dispatcher, consumer)
+      let dispatcher = dispatcher.subscribe(state.dispatcher, consumer)
       let monitors = state.monitors |> dict.insert(consumer, mon)
       let state = State(..state, selector:, consumers:, dispatcher:, monitors:)
       actor.continue(state) |> actor.with_selector(selector)
@@ -94,14 +94,14 @@ fn handler(message: ProducerMessage(a), state: State(state, a)) {
         }
         _ -> state.monitors
       }
-      let dispatcher = stage.cancel(state.dispatcher, consumer)
+      let dispatcher = dispatcher.cancel(state.dispatcher, consumer)
       let state = State(..state, consumers:, dispatcher:, monitors:)
       actor.continue(state)
     }
     ConsumerDown(consumer) -> {
       let consumers = set.delete(state.consumers, consumer)
       let monitors = dict.delete(state.monitors, consumer)
-      let dispatcher = stage.cancel(state.dispatcher, consumer)
+      let dispatcher = dispatcher.cancel(state.dispatcher, consumer)
       let state = State(..state, consumers:, dispatcher:, monitors:)
       actor.continue(state)
     }
@@ -113,7 +113,7 @@ fn ask_demand(
   consumer: Subject(ConsumerMessage(a)),
   state: State(state, a),
 ) {
-  stage.ask_dispatcher(state.dispatcher, demand, consumer)
+  dispatcher.ask(state.dispatcher, demand, consumer)
   |> handle_dispatcher_result(state)
 }
 
@@ -151,7 +151,7 @@ fn take_from_buffer(demand: Int, state: State(state, event)) {
     [] -> #(demand, state)
     _ -> {
       let #(events, dispatcher) =
-        stage.dispatch(
+        dispatcher.dispatch(
           state.dispatcher,
           state.self,
           events,
@@ -172,7 +172,7 @@ fn dispatch_events(state: State(state, event), events: List(event), length) {
   })
 
   let #(events, dispatcher) =
-    stage.dispatch(state.dispatcher, state.self, events, length)
+    dispatcher.dispatch(state.dispatcher, state.self, events, length)
   let buffer = buffer.store(state.buffer, events)
   State(..state, buffer: buffer, dispatcher: dispatcher)
 }
