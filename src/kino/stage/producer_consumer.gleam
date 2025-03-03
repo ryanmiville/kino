@@ -9,7 +9,6 @@ import gleam/list
 import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
-import gleam/string
 import kino/stage/consumer.{type Batch, type Demand, Batch, Demand}
 
 import kino/stage.{
@@ -17,7 +16,6 @@ import kino/stage.{
   type ProducerMessage, ConsumerMessage, ProducerMessage,
 }
 import kino/stage/internal/buffer.{type Buffer, type Take, Take}
-import logging
 
 pub type ProducerConsumer(in, out) {
   ProducerConsumer(
@@ -115,11 +113,6 @@ pub fn handler(
 fn producer_handler(message: ProducerMessage(out), state: State(state, in, out)) {
   case message {
     stage.Subscribe(consumer, demand) -> {
-      logging.log(
-        logging.Debug,
-        "ProducerConsumer: New consumer subscribing with demand "
-          <> string.inspect(demand),
-      )
       let consumers = set.insert(state.consumers, consumer)
       let mon = process.monitor_process(process.subject_owner(consumer))
       let selector =
@@ -149,8 +142,7 @@ fn producer_handler(message: ProducerMessage(out), state: State(state, in, out))
       let counter = counter + demand
       let state = State(..state, dispatcher:, events: Events(queue, counter))
 
-      let #(from_buffer, state) = take_from_buffer(counter, state)
-      logging.log(logging.Debug, "from_buffer: " <> string.inspect(from_buffer))
+      let #(_, state) = take_from_buffer(counter, state)
       let Events(queue, demand) = state.events
       take_events(queue, demand, state)
     }
@@ -229,7 +221,6 @@ fn dispatch_events(state: State(state, in, out), events: List(out), length: Int)
     let buffer = buffer.store(state.buffer, events)
     State(..state, buffer:)
   })
-  logging.log(logging.Debug, "dispatch_events: " <> string.inspect(events))
   let #(events, dispatcher) =
     stage.dispatch(state.dispatcher, state.producer_self, events, length)
 
@@ -254,7 +245,6 @@ fn take_events(
     let stage = State(..stage, events: Events(queue, counter))
     actor.continue(stage)
   })
-  logging.log(logging.Debug, "take_events: " <> string.inspect(counter))
   case deque.pop_front(queue) {
     Ok(#(#(events, from), queue)) -> {
       let stage = State(..stage, events: Events(queue, counter))

@@ -3,10 +3,10 @@ import gleam/io
 import gleam/list
 import gleam/otp/actor
 import gleam/string
-import kino/consumer
-import kino/producer
-import kino/producer_consumer
 import kino/stage
+import kino/stage/consumer
+import kino/stage/producer
+import kino/stage/producer_consumer
 import logging
 
 pub fn main() {

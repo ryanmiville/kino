@@ -10,7 +10,6 @@ import gleam/result
 import kino/stage.{
   ConsumerSubscribe, ConsumerUnsubscribe, NewEvents, ProducerDown,
 }
-import logging
 
 pub type Consumer(event) {
   Consumer(subject: Subject(Message(event)))
@@ -109,7 +108,6 @@ fn handler(
       }
     }
     ConsumerUnsubscribe(source) -> {
-      logging.log(logging.Debug, "unsub producer")
       let producers = dict.delete(state.producers, source)
       let monitors = case dict.get(state.monitors, source) {
         Ok(mon) -> {
@@ -129,7 +127,6 @@ fn handler(
       }
     }
     ProducerDown(source) -> {
-      logging.log(logging.Debug, "producer down")
       let producers = dict.delete(state.producers, source)
       let monitors = dict.delete(state.monitors, source)
       let state = State(..state, producers:, monitors:)

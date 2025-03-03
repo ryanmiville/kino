@@ -5,10 +5,6 @@ import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 
-pub type Producer(a) {
-  Producer(subject: Subject(ProducerMessage(a)))
-}
-
 pub type ProducerMessage(a) {
   Ask(demand: Int, consumer: Subject(ConsumerMessage(a)))
   Subscribe(consumer: Subject(ConsumerMessage(a)), demand: Int)

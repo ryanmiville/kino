@@ -89,7 +89,6 @@ fn handler(message: ProducerMessage(a), state: State(state, a)) {
       ask_demand(demand, consumer, state)
     }
     Unsubscribe(consumer) -> {
-      // logging.log(logging.Debug, "unsub consumer")
       let consumers = set.delete(state.consumers, consumer)
       let monitors = case dict.get(state.monitors, consumer) {
         Ok(mon) -> {
@@ -103,7 +102,6 @@ fn handler(message: ProducerMessage(a), state: State(state, a)) {
       actor.continue(state)
     }
     ConsumerDown(consumer) -> {
-      // logging.log(logging.Debug, "consumer down")
       let consumers = set.delete(state.consumers, consumer)
       let monitors = dict.delete(state.monitors, consumer)
       let dispatcher = cancel(state.dispatcher, consumer)
@@ -131,14 +129,11 @@ fn handle_dispatcher_result(
 }
 
 fn take_from_buffer_or_pull(demand: Int, state: State(state, event)) {
-  // logging.log(logging.Debug, "demand: " <> string.inspect(demand))
   case take_from_buffer(demand, state) {
     #(0, state) -> {
-      // logging.log(logging.Debug, "continue from take")
       actor.continue(state)
     }
     #(demand, state) -> {
-      // logging.log(logging.Debug, "pulling")
       case state.pull(state.state, demand) {
         Next(events, new_state) -> {
           let state = State(..state, state: new_state)
@@ -146,7 +141,6 @@ fn take_from_buffer_or_pull(demand: Int, state: State(state, event)) {
           actor.continue(state)
         }
         Done -> {
-          // logging.log(logging.Debug, "called done")
           actor.Stop(process.Normal)
         }
       }
