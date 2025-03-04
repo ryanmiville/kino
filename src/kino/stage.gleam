@@ -1,10 +1,26 @@
 import gleam/erlang/process.{type Subject}
 
-pub type ProducerMessage(a) {
-  Ask(demand: Int, consumer: Subject(ConsumerMessage(a)))
-  Subscribe(consumer: Subject(ConsumerMessage(a)), demand: Int)
-  Unsubscribe(consumer: Subject(ConsumerMessage(a)))
-  ConsumerDown(consumer: Subject(ConsumerMessage(a)))
+// pub opaque type Producer(event) {
+//   Producer(Subject(ProducerMessage(event)))
+// }
+
+// pub opaque type ProducerConsumer(in, out) {
+//   ProducerConsumer(
+//     subject: Subject(ProducerConsumerMessage(in, out)),
+//     consumer_subject: Subject(ConsumerMessage(in)),
+//     producer_subject: Subject(ProducerMessage(out)),
+//   )
+// }
+
+// pub opaque type Consumer(event) {
+//   Consumer(Subject(ConsumerMessage(event)))
+// }
+
+pub type ProducerMessage(event) {
+  Ask(demand: Int, consumer: Subject(ConsumerMessage(event)))
+  Subscribe(consumer: Subject(ConsumerMessage(event)), demand: Int)
+  Unsubscribe(consumer: Subject(ConsumerMessage(event)))
+  ConsumerDown(consumer: Subject(ConsumerMessage(event)))
 }
 
 pub type ProducerConsumerMessage(in, out) {
@@ -12,19 +28,19 @@ pub type ProducerConsumerMessage(in, out) {
   ProducerMessage(ProducerMessage(out))
 }
 
-pub type ConsumerMessage(a) {
-  NewEvents(events: List(a), from: Subject(ProducerMessage(a)))
+pub type ConsumerMessage(event) {
+  NewEvents(events: List(event), from: Subject(ProducerMessage(event)))
   ConsumerSubscribe(
-    source: Subject(ProducerMessage(a)),
+    source: Subject(ProducerMessage(event)),
     min_demand: Int,
     max_demand: Int,
   )
-  ConsumerUnsubscribe(source: Subject(ProducerMessage(a)))
-  ProducerDown(producer: Subject(ProducerMessage(a)))
+  ConsumerUnsubscribe(source: Subject(ProducerMessage(event)))
+  ProducerDown(producer: Subject(ProducerMessage(event)))
 }
 
-pub type Produce(state, a) {
-  Next(elements: List(a), state: state)
+pub type Produce(state, event) {
+  Next(elements: List(event), state: state)
   Done
 }
 
@@ -34,8 +50,8 @@ pub type BufferStrategy {
 }
 
 pub fn subscribe(
-  consumer consumer: Subject(ConsumerMessage(a)),
-  to producer: Subject(ProducerMessage(a)),
+  consumer consumer: Subject(ConsumerMessage(event)),
+  to producer: Subject(ProducerMessage(event)),
   min_demand min_demand: Int,
   max_demand max_demand: Int,
 ) {
