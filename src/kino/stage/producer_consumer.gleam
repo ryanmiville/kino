@@ -9,12 +9,12 @@ import gleam/list
 import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
-import kino/stage/consumer.{type Batch, type Demand, Batch, Demand}
 
 import kino/stage.{
   type ConsumerMessage, type ProducerConsumerMessage, type ProducerMessage,
   ConsumerMessage, ProducerMessage,
 }
+import kino/stage/internal/batch.{type Batch, type Demand, Batch, Demand}
 import kino/stage/internal/buffer.{type Buffer, type Take, Take}
 import kino/stage/internal/dispatcher.{type DemandDispatcher}
 
@@ -268,7 +268,7 @@ fn send_events(
 ) -> actor.Next(ProducerConsumerMessage(in, out), State(state, in, out)) {
   case dict.get(stage.producers, from) {
     Ok(demand) -> {
-      let #(current, batches) = consumer.split_batches(events, demand)
+      let #(current, batches) = batch.events(events, demand)
       let demand = Demand(..demand, current:)
       let producers = dict.insert(stage.producers, from, demand)
       let state = State(..stage, producers:)
