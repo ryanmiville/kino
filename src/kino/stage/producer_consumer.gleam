@@ -1,21 +1,22 @@
 import gleam/bool
 import gleam/deque.{type Deque}
 import gleam/dict.{type Dict}
-import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type ProcessMonitor, type Selector, type Subject}
 import gleam/function
 import gleam/int
 import gleam/list
-import gleam/otp/actor
+import gleam/option.{type Option, None, Some}
+import gleam/otp/actor.{type StartError}
 import gleam/result
 import gleam/set.{type Set}
-import kino/stage/consumer.{type Batch, type Demand, Batch, Demand}
-
 import kino/stage.{
-  type ConsumerMessage, type DemandDispatcher, type ProducerConsumerMessage,
-  type ProducerMessage, ConsumerMessage, ProducerMessage,
+  type BufferStrategy, type ConsumerMessage, type Produce,
+  type ProducerConsumerMessage, type ProducerMessage, ConsumerMessage, Done,
+  KeepFirst, KeepLast, ProducerMessage,
 }
+import kino/stage/internal/batch.{type Batch, type Demand, Batch, Demand}
 import kino/stage/internal/buffer.{type Buffer, type Take, Take}
+import kino/stage/internal/dispatcher.{type DemandDispatcher}
 
 pub type ProducerConsumer(in, out) {
   ProducerConsumer(
@@ -25,7 +26,121 @@ pub type ProducerConsumer(in, out) {
   )
 }
 
-pub type State(state, in, out) {
+pub opaque type Builder(state, in, out) {
+  Builder(
+    init: fn() -> state,
+    init_timeout: Int,
+    handle_events: fn(state, List(in)) -> Produce(state, out),
+    buffer_strategy: BufferStrategy,
+    buffer_capacity: Option(Int),
+  )
+}
+
+pub fn new(state: state) -> Builder(state, in, out) {
+  Builder(
+    init: fn() { state },
+    init_timeout: 1000,
+    handle_events: fn(_, _) { Done },
+    buffer_strategy: stage.KeepLast,
+    buffer_capacity: None,
+  )
+}
+
+pub fn new_with_init(
+  timeout: Int,
+  init: fn() -> state,
+) -> Builder(state, in, out) {
+  Builder(
+    init: init,
+    init_timeout: timeout,
+    handle_events: fn(_, _) { Done },
+    buffer_strategy: stage.KeepLast,
+    buffer_capacity: None,
+  )
+}
+
+pub fn handle_events(
+  builder: Builder(state, in, out),
+  handle_events: fn(state, List(in)) -> Produce(state, out),
+) -> Builder(state, in, out) {
+  Builder(..builder, handle_events:)
+}
+
+pub fn buffer_strategy(
+  builder: Builder(state, in, out),
+  buffer_strategy: BufferStrategy,
+) -> Builder(state, in, out) {
+  Builder(..builder, buffer_strategy:)
+}
+
+pub fn buffer_capacity(
+  builder: Builder(state, in, out),
+  buffer_capacity: Int,
+) -> Builder(state, in, out) {
+  Builder(..builder, buffer_capacity: Some(buffer_capacity))
+}
+
+pub fn start(
+  builder: Builder(state, in, out),
+) -> Result(ProducerConsumer(in, out), StartError) {
+  let ack = process.new_subject()
+  actor.start_spec(actor.Spec(
+    init: fn() {
+      let state = builder.init()
+      let buffer = case builder.buffer_capacity, builder.buffer_strategy {
+        Some(c), KeepFirst ->
+          buffer.new() |> buffer.keep(buffer.First) |> buffer.capacity(c)
+        Some(c), KeepLast ->
+          buffer.new() |> buffer.keep(buffer.Last) |> buffer.capacity(c)
+        None, KeepFirst -> buffer.new() |> buffer.keep(buffer.First)
+        None, KeepLast -> buffer.new() |> buffer.keep(buffer.Last)
+      }
+      let self = process.new_subject()
+      let consumer_self = process.new_subject()
+      let producer_self = process.new_subject()
+
+      let ps =
+        process.new_selector()
+        |> process.selecting(producer_self, ProducerMessage)
+      let cs =
+        process.new_selector()
+        |> process.selecting(consumer_self, ConsumerMessage)
+
+      let selector =
+        process.new_selector()
+        |> process.selecting(self, function.identity)
+        |> process.merge_selector(ps)
+        |> process.merge_selector(cs)
+
+      process.send(ack, #(self, consumer_self, producer_self))
+      let state =
+        State(
+          self:,
+          consumer_self:,
+          producer_self:,
+          selector:,
+          state:,
+          buffer:,
+          dispatcher: dispatcher.new(),
+          consumers: set.new(),
+          producers: dict.new(),
+          consumer_monitors: dict.new(),
+          producer_monitors: dict.new(),
+          events: Events(queue: deque.new(), demand: 0),
+          handle_events: builder.handle_events,
+        )
+      actor.Ready(state, selector)
+    },
+    loop: on_message,
+    init_timeout: builder.init_timeout,
+  ))
+  |> result.map(fn(_) {
+    let #(self, consumer_self, producer_self) = process.receive_forever(ack)
+    ProducerConsumer(self, consumer_self, producer_self)
+  })
+}
+
+type State(state, in, out) {
   State(
     self: Subject(ProducerConsumerMessage(in, out)),
     consumer_self: Subject(ConsumerMessage(in)),
@@ -43,64 +158,11 @@ pub type State(state, in, out) {
   )
 }
 
-pub type Events(in) {
+type Events(in) {
   Events(queue: Deque(#(List(in), Subject(ProducerMessage(in)))), demand: Int)
 }
 
-pub fn new(
-  state: state,
-  handle_events: fn(state, List(in)) -> stage.Produce(state, out),
-) -> Result(ProducerConsumer(in, out), Dynamic) {
-  let ack = process.new_subject()
-  actor.start_spec(actor.Spec(
-    init: fn() {
-      let self = process.new_subject()
-      let consumer_self = process.new_subject()
-      let producer_self = process.new_subject()
-
-      let ps =
-        process.new_selector()
-        |> process.selecting(producer_self, stage.ProducerMessage)
-      let cs =
-        process.new_selector()
-        |> process.selecting(consumer_self, stage.ConsumerMessage)
-
-      let selector =
-        process.new_selector()
-        |> process.selecting(self, function.identity)
-        |> process.merge_selector(ps)
-        |> process.merge_selector(cs)
-
-      process.send(ack, #(self, consumer_self, producer_self))
-      let state =
-        State(
-          self:,
-          consumer_self:,
-          producer_self:,
-          selector:,
-          state:,
-          buffer: buffer.new(),
-          dispatcher: stage.new_dispatcher(),
-          consumers: set.new(),
-          producers: dict.new(),
-          consumer_monitors: dict.new(),
-          producer_monitors: dict.new(),
-          events: Events(queue: deque.new(), demand: 0),
-          handle_events:,
-        )
-      actor.Ready(state, selector)
-    },
-    loop: handler,
-    init_timeout: 5000,
-  ))
-  |> result.map(fn(_) {
-    let #(self, consumer_self, producer_self) = process.receive_forever(ack)
-    ProducerConsumer(self, consumer_self, producer_self)
-  })
-  |> result.map_error(dynamic.from)
-}
-
-pub fn handler(
+fn on_message(
   message: ProducerConsumerMessage(in, out),
   state: State(state, in, out),
 ) {
@@ -122,7 +184,7 @@ fn producer_handler(message: ProducerMessage(out), state: State(state, in, out))
         })
         |> process.merge_selector(state.selector)
       process.send(state.producer_self, stage.Ask(demand, consumer))
-      let dispatcher = stage.subscribe_dispatcher(state.dispatcher, consumer)
+      let dispatcher = dispatcher.subscribe(state.dispatcher, consumer)
       let monitors = state.consumer_monitors |> dict.insert(consumer, mon)
       let state =
         State(
@@ -136,7 +198,7 @@ fn producer_handler(message: ProducerMessage(out), state: State(state, in, out))
     }
     stage.Ask(demand:, consumer:) -> {
       let #(counter, dispatcher) =
-        stage.ask_dispatcher(state.dispatcher, demand, consumer)
+        dispatcher.ask(state.dispatcher, demand, consumer)
 
       let Events(queue, demand) = state.events
       let counter = counter + demand
@@ -155,7 +217,7 @@ fn producer_handler(message: ProducerMessage(out), state: State(state, in, out))
         }
         _ -> state.consumer_monitors
       }
-      let dispatcher = stage.cancel(state.dispatcher, consumer)
+      let dispatcher = dispatcher.cancel(state.dispatcher, consumer)
       let state =
         State(..state, consumers:, dispatcher:, consumer_monitors: monitors)
       actor.continue(state)
@@ -163,7 +225,7 @@ fn producer_handler(message: ProducerMessage(out), state: State(state, in, out))
     stage.ConsumerDown(consumer) -> {
       let consumers = set.delete(state.consumers, consumer)
       let monitors = dict.delete(state.consumer_monitors, consumer)
-      let dispatcher = stage.cancel(state.dispatcher, consumer)
+      let dispatcher = dispatcher.cancel(state.dispatcher, consumer)
       let state =
         State(..state, consumers:, dispatcher:, consumer_monitors: monitors)
       actor.continue(state)
@@ -222,7 +284,7 @@ fn dispatch_events(state: State(state, in, out), events: List(out), length: Int)
     State(..state, buffer:)
   })
   let #(events, dispatcher) =
-    stage.dispatch(state.dispatcher, state.producer_self, events, length)
+    dispatcher.dispatch(state.dispatcher, state.producer_self, events, length)
 
   let Events(queue, demand) = state.events
   let demand = demand - { length - list.length(events) }
@@ -267,7 +329,7 @@ fn send_events(
 ) -> actor.Next(ProducerConsumerMessage(in, out), State(state, in, out)) {
   case dict.get(stage.producers, from) {
     Ok(demand) -> {
-      let #(current, batches) = consumer.split_batches(events, demand)
+      let #(current, batches) = batch.events(events, demand)
       let demand = Demand(..demand, current:)
       let producers = dict.insert(stage.producers, from, demand)
       let state = State(..stage, producers:)
