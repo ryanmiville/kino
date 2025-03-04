@@ -34,11 +34,13 @@ fn doubler(
   receiver: process.Subject(List(Int)),
 ) -> producer_consumer.ProducerConsumer(Int, Int) {
   let assert Ok(producer_consumer) =
-    producer_consumer.new(0, fn(state, events) {
+    producer_consumer.new(0)
+    |> producer_consumer.handle_events(fn(state, events) {
       process.send(receiver, events)
       let events = list.flat_map(events, fn(event) { [event, event] })
       Next(events, state)
     })
+    |> producer_consumer.start
   producer_consumer
 }
 
@@ -46,10 +48,12 @@ fn pass_through(
   receiver: process.Subject(List(Int)),
 ) -> producer_consumer.ProducerConsumer(Int, Int) {
   let assert Ok(producer_consumer) =
-    producer_consumer.new(0, fn(state, events) {
+    producer_consumer.new(0)
+    |> producer_consumer.handle_events(fn(state, events) {
       process.send(receiver, events)
       Next(events, state)
     })
+    |> producer_consumer.start
   producer_consumer
 }
 
@@ -57,10 +61,12 @@ fn discarder(
   receiver: process.Subject(List(Int)),
 ) -> producer_consumer.ProducerConsumer(Int, Int) {
   let assert Ok(producer_consumer) =
-    producer_consumer.new(0, fn(state, events) {
+    producer_consumer.new(0)
+    |> producer_consumer.handle_events(fn(state, events) {
       process.send(receiver, events)
       Next([], state)
     })
+    |> producer_consumer.start
   producer_consumer
 }
 

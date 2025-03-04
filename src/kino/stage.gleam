@@ -28,6 +28,11 @@ pub type Produce(state, a) {
   Done
 }
 
+pub type BufferStrategy {
+  KeepFirst
+  KeepLast
+}
+
 pub fn subscribe(
   consumer consumer: Subject(ConsumerMessage(a)),
   to producer: Subject(ProducerMessage(a)),

@@ -26,31 +26,37 @@ pub fn main() {
 }
 
 fn producer() {
-  producer.new(0)
-  |> producer.pull(fn(state, demand) {
+  let pull = fn(state, demand) {
     let events = list.range(state, state + demand - 1)
     stage.Next(events, state + demand)
-  })
+  }
+  producer.new(0)
+  |> producer.pull(pull)
   |> producer.start
 }
 
 fn producer_consumer() {
-  producer_consumer.new(0, fn(state, events) {
+  let handle_events = fn(state, events) {
     logging.log(
       logging.Debug,
       "ProducerConsumer: Received events: " <> string.inspect(events),
     )
     // let events = list.map(events, fn(x) { x * 2 })
     stage.Next(events, state)
-  })
+  }
+
+  producer_consumer.new(0)
+  |> producer_consumer.handle_events(handle_events)
+  |> producer_consumer.start
 }
 
 fn consumer() {
-  consumer.new(0)
-  |> consumer.handle_events(fn(state, events) {
+  let handle_events = fn(state, events) {
     io.debug(events)
     process.sleep(500)
     actor.continue(state)
-  })
+  }
+  consumer.new(0)
+  |> consumer.handle_events(handle_events)
   |> consumer.start
 }
