@@ -1,13 +1,11 @@
 import gleam/bool
 import gleam/dict.{type Dict}
-import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type ProcessMonitor, type Selector, type Subject}
 import gleam/function
 import gleam/list
-import gleam/otp/actor
+import gleam/otp/actor.{type StartError}
 import gleam/result
 import gleam/set.{type Set}
-
 import kino/stage.{
   type ConsumerMessage, type Produce, type ProducerMessage, Ask, ConsumerDown,
   Done, Next, Subscribe, Unsubscribe,
@@ -15,31 +13,78 @@ import kino/stage.{
 import kino/stage/internal/buffer.{type Buffer, Take}
 import kino/stage/internal/dispatcher.{type DemandDispatcher, DemandDispatcher}
 
-pub type Producer(a) {
-  Producer(subject: Subject(ProducerMessage(a)))
+pub type Producer(event) =
+  Subject(ProducerMessage(event))
+
+pub type BufferStrategy {
+  KeepFirst
+  KeepLast
 }
 
-type State(state, a) {
-  State(
-    self: Subject(ProducerMessage(a)),
-    selector: Selector(ProducerMessage(a)),
-    state: state,
-    buffer: Buffer(a),
-    dispatcher: DemandDispatcher(a),
-    consumers: Set(Subject(ConsumerMessage(a))),
-    monitors: Dict(Subject(ConsumerMessage(a)), ProcessMonitor),
-    pull: fn(state, Int) -> Produce(state, a),
+pub opaque type Builder(state, event) {
+  Builder(
+    init: fn() -> state,
+    init_timeout: Int,
+    pull: fn(state, Int) -> Produce(state, event),
+    buffer_strategy: BufferStrategy,
+    buffer_capacity: Int,
   )
 }
 
-pub fn new(
-  state: state,
-  pull: fn(state, Int) -> Produce(state, a),
-) -> Result(Producer(a), Dynamic) {
+pub fn new(state: state) -> Builder(state, event) {
+  Builder(
+    init: fn() { state },
+    init_timeout: 1000,
+    pull: fn(_, _) { Done },
+    buffer_strategy: KeepLast,
+    buffer_capacity: 10_000,
+  )
+}
+
+pub fn new_with_init(timeout: Int, init: fn() -> state) -> Builder(state, event) {
+  Builder(
+    init: init,
+    init_timeout: timeout,
+    pull: fn(_, _) { Done },
+    buffer_strategy: KeepLast,
+    buffer_capacity: 10_000,
+  )
+}
+
+pub fn pull(
+  builder: Builder(state, event),
+  pull: fn(state, Int) -> Produce(state, event),
+) -> Builder(state, event) {
+  Builder(..builder, pull:)
+}
+
+pub fn buffer_strategy(
+  builder: Builder(state, event),
+  buffer_strategy: BufferStrategy,
+) -> Builder(state, event) {
+  Builder(..builder, buffer_strategy:)
+}
+
+pub fn buffer_capacity(
+  builder: Builder(state, event),
+  buffer_capacity: Int,
+) -> Builder(state, event) {
+  Builder(..builder, buffer_capacity:)
+}
+
+pub fn start(
+  builder: Builder(state, event),
+) -> Result(Producer(event), StartError) {
   let ack = process.new_subject()
   actor.start_spec(actor.Spec(
     init: fn() {
+      let state = builder.init()
+      let buf = buffer.new() |> buffer.capacity(builder.buffer_capacity)
       let self = process.new_subject()
+      let buffer = case builder.buffer_strategy {
+        KeepFirst -> buffer.keep(buf, buffer.First)
+        KeepLast -> buffer.keep(buf, buffer.Last)
+      }
       let selector =
         process.new_selector()
         |> process.selecting(self, function.identity)
@@ -49,25 +94,34 @@ pub fn new(
           self: self,
           selector: selector,
           state: state,
-          buffer: buffer.new() |> buffer.capacity(10_000),
+          buffer: buffer,
           dispatcher: dispatcher.new(),
           consumers: set.new(),
           monitors: dict.new(),
-          pull: pull,
+          pull: builder.pull,
         )
       actor.Ready(state, selector)
     },
-    loop: handler,
-    init_timeout: 5000,
+    loop: on_message,
+    init_timeout: builder.init_timeout,
   ))
-  |> result.map(fn(_) {
-    let subject = process.receive_forever(ack)
-    Producer(subject)
-  })
-  |> result.map_error(dynamic.from)
+  |> result.map(fn(_) { process.receive_forever(ack) })
 }
 
-fn handler(message: ProducerMessage(a), state: State(state, a)) {
+type State(state, event) {
+  State(
+    self: Subject(ProducerMessage(event)),
+    selector: Selector(ProducerMessage(event)),
+    state: state,
+    buffer: Buffer(event),
+    dispatcher: DemandDispatcher(event),
+    consumers: Set(Subject(ConsumerMessage(event))),
+    monitors: Dict(Subject(ConsumerMessage(event)), ProcessMonitor),
+    pull: fn(state, Int) -> Produce(state, event),
+  )
+}
+
+fn on_message(message: ProducerMessage(event), state: State(state, event)) {
   case message {
     Subscribe(consumer, demand) -> {
       let consumers = set.insert(state.consumers, consumer)
@@ -110,8 +164,8 @@ fn handler(message: ProducerMessage(a), state: State(state, a)) {
 
 fn ask_demand(
   demand: Int,
-  consumer: Subject(ConsumerMessage(a)),
-  state: State(state, a),
+  consumer: Subject(ConsumerMessage(event)),
+  state: State(state, event),
 ) {
   dispatcher.ask(state.dispatcher, demand, consumer)
   |> handle_dispatcher_result(state)

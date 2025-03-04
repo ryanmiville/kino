@@ -1,42 +1,65 @@
 import gleam/dict.{type Dict}
-import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type ProcessMonitor, type Selector, type Subject}
 import gleam/function
-
-import gleam/otp/actor
+import gleam/otp/actor.{type StartError}
 import gleam/result
 import kino/stage.{
-  ConsumerSubscribe, ConsumerUnsubscribe, NewEvents, ProducerDown,
+  type ConsumerMessage, ConsumerSubscribe, ConsumerUnsubscribe, NewEvents,
+  ProducerDown,
 }
 import kino/stage/internal/batch.{type Batch, type Demand, Batch, Demand}
 
-pub type Consumer(event) {
-  Consumer(subject: Subject(Message(event)))
-}
+pub type Consumer(event) =
+  Subject(ConsumerMessage(event))
 
-type Message(event) =
-  stage.ConsumerMessage(event)
-
-type State(state, event) {
-  State(
-    self: Subject(Message(event)),
-    selector: Selector(Message(event)),
-    state: state,
+pub opaque type Builder(state, event) {
+  Builder(
+    init: fn() -> state,
+    init_timeout: Int,
     handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
     on_shutdown: fn(state) -> Nil,
-    producers: Dict(Subject(stage.ProducerMessage(event)), Demand),
-    monitors: Dict(Subject(stage.ProducerMessage(event)), ProcessMonitor),
   )
 }
 
-pub fn new_with_shutdown(
-  state: state,
+pub fn new(state: state) -> Builder(state, event) {
+  Builder(
+    init: fn() { state },
+    init_timeout: 1000,
+    handle_events: fn(_, _) { actor.Stop(process.Normal) },
+    on_shutdown: fn(_) { Nil },
+  )
+}
+
+pub fn new_with_init(timeout: Int, init: fn() -> state) -> Builder(state, event) {
+  Builder(
+    init: init,
+    init_timeout: timeout,
+    handle_events: fn(_, _) { actor.Stop(process.Normal) },
+    on_shutdown: fn(_) { Nil },
+  )
+}
+
+pub fn handle_events(
+  builder: Builder(state, event),
   handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
+) -> Builder(state, event) {
+  Builder(..builder, handle_events:)
+}
+
+pub fn on_shutdown(
+  builder: Builder(state, event),
   on_shutdown: fn(state) -> Nil,
-) -> Result(Consumer(event), Dynamic) {
+) -> Builder(state, event) {
+  Builder(..builder, on_shutdown:)
+}
+
+pub fn start(
+  builder: Builder(state, event),
+) -> Result(Consumer(event), StartError) {
   let ack = process.new_subject()
   actor.start_spec(actor.Spec(
     init: fn() {
+      let state = builder.init()
       let self = process.new_subject()
       let selector =
         process.new_selector()
@@ -47,34 +70,35 @@ pub fn new_with_shutdown(
           self:,
           selector:,
           state:,
-          handle_events: handle_events,
-          on_shutdown: on_shutdown,
+          handle_events: builder.handle_events,
+          on_shutdown: builder.on_shutdown,
           producers: dict.new(),
           monitors: dict.new(),
         )
       actor.Ready(state, selector)
     },
-    loop: handler,
-    init_timeout: 5000,
+    loop: on_message,
+    init_timeout: builder.init_timeout,
   ))
-  |> result.map(fn(_) {
-    let subject = process.receive_forever(ack)
-    Consumer(subject)
-  })
-  |> result.map_error(dynamic.from)
+  |> result.map(fn(_) { process.receive_forever(ack) })
 }
 
-pub fn new(
-  state: state,
-  handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
-) -> Result(Consumer(event), Dynamic) {
-  new_with_shutdown(state, handle_events, fn(_) { Nil })
+type State(state, event) {
+  State(
+    self: Subject(ConsumerMessage(event)),
+    selector: Selector(ConsumerMessage(event)),
+    state: state,
+    handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
+    on_shutdown: fn(state) -> Nil,
+    producers: Dict(Subject(stage.ProducerMessage(event)), Demand),
+    monitors: Dict(Subject(stage.ProducerMessage(event)), ProcessMonitor),
+  )
 }
 
-fn handler(
-  message: Message(event),
+fn on_message(
+  message: ConsumerMessage(event),
   state: State(state, event),
-) -> actor.Next(Message(event), State(state, event)) {
+) -> actor.Next(ConsumerMessage(event), State(state, event)) {
   case message {
     ConsumerSubscribe(source, min, max) -> {
       let producers =
@@ -140,7 +164,7 @@ fn dispatch(
   state: State(state, event),
   batches: List(Batch(event)),
   from: Subject(stage.ProducerMessage(event)),
-) -> actor.Next(Message(event), State(state, event)) {
+) -> actor.Next(ConsumerMessage(event), State(state, event)) {
   case batches {
     [] -> actor.continue(state)
     [Batch(events, size), ..rest] -> {

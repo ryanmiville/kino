@@ -16,20 +16,22 @@ pub fn main() {
   let assert Ok(producer_consumer) = producer_consumer()
   let assert Ok(consumer) = consumer()
 
-  consumer.subject
+  consumer
   |> stage.subscribe(producer_consumer.producer_subject, 4, 9)
 
   producer_consumer.consumer_subject
-  |> stage.subscribe(producer.subject, 6, 13)
+  |> stage.subscribe(producer, 6, 13)
 
   process.sleep(5000)
 }
 
 fn producer() {
-  producer.new(0, fn(state, demand) {
+  producer.new(0)
+  |> producer.pull(fn(state, demand) {
     let events = list.range(state, state + demand - 1)
     stage.Next(events, state + demand)
   })
+  |> producer.start
 }
 
 fn producer_consumer() {
@@ -44,9 +46,11 @@ fn producer_consumer() {
 }
 
 fn consumer() {
-  consumer.new(0, fn(state, events) {
+  consumer.new(0)
+  |> consumer.handle_events(fn(state, events) {
     io.debug(events)
     process.sleep(500)
     actor.continue(state)
   })
+  |> consumer.start
 }

@@ -9,7 +9,6 @@ import gleam/list
 import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
-
 import kino/stage.{
   type ConsumerMessage, type ProducerConsumerMessage, type ProducerMessage,
   ConsumerMessage, ProducerMessage,
@@ -26,7 +25,7 @@ pub type ProducerConsumer(in, out) {
   )
 }
 
-pub type State(state, in, out) {
+type State(state, in, out) {
   State(
     self: Subject(ProducerConsumerMessage(in, out)),
     consumer_self: Subject(ConsumerMessage(in)),
@@ -44,7 +43,7 @@ pub type State(state, in, out) {
   )
 }
 
-pub type Events(in) {
+type Events(in) {
   Events(queue: Deque(#(List(in), Subject(ProducerMessage(in)))), demand: Int)
 }
 
@@ -101,7 +100,7 @@ pub fn new(
   |> result.map_error(dynamic.from)
 }
 
-pub fn handler(
+fn handler(
   message: ProducerConsumerMessage(in, out),
   state: State(state, in, out),
 ) {
