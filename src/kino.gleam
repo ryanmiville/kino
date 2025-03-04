@@ -5,6 +5,7 @@ import gleam/otp/actor
 import gleam/string
 import kino/stage
 import kino/stage/consumer
+import kino/stage/internal/stage.{subscribe} as internal
 import kino/stage/producer
 import kino/stage/producer_consumer
 import logging
@@ -17,10 +18,10 @@ pub fn main() {
   let assert Ok(consumer) = consumer()
 
   consumer
-  |> stage.subscribe(producer_consumer.producer_subject, 4, 9)
+  |> subscribe(producer_consumer.producer_subject, 4, 9)
 
   producer_consumer.consumer_subject
-  |> stage.subscribe(producer, 6, 13)
+  |> subscribe(producer, 6, 13)
 
   process.sleep(5000)
 }
@@ -35,7 +36,8 @@ fn producer() {
 }
 
 fn producer_consumer() {
-  producer_consumer.new(0, fn(state, events) {
+  producer_consumer.new(0)
+  |> producer_consumer.handle_events(fn(state, events) {
     logging.log(
       logging.Debug,
       "ProducerConsumer: Received events: " <> string.inspect(events),
@@ -43,6 +45,7 @@ fn producer_consumer() {
     // let events = list.map(events, fn(x) { x * 2 })
     stage.Next(events, state)
   })
+  |> producer_consumer.start
 }
 
 fn consumer() {
