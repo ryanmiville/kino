@@ -6,6 +6,7 @@ import kino/stage.{Next}
 import kino/stage/consumer
 import kino/stage/producer
 import kino/stage/producer_consumer
+import kino/stage/subscribe
 
 fn counter(initial_state: Int) -> producer.Producer(Int) {
   let pull = fn(state, demand) {
@@ -189,7 +190,10 @@ pub fn producer_to_consumer_default_demand_test() {
   let events_subject = process.new_subject()
   let consumer = forwarder(events_subject)
 
-  consumer |> stage.subscribe(prod, 500, 1000)
+  subscribe.consumer(consumer)
+  |> subscribe.min_demand(500)
+  |> subscribe.max_demand(1000)
+  |> subscribe.to(prod)
 
   let batch = list.range(0, 499)
   assert_received(events_subject, batch, 20)
@@ -204,7 +208,10 @@ pub fn producer_to_consumer_80_percent_min_demand_test() {
   let events_subject = process.new_subject()
   let consumer = forwarder(events_subject)
 
-  consumer |> stage.subscribe(prod, 80, 100)
+  subscribe.consumer(consumer)
+  |> subscribe.min_demand(80)
+  |> subscribe.max_demand(100)
+  |> subscribe.to(prod)
 
   let batch = list.range(0, 19)
   assert_received(events_subject, batch, 20)
@@ -222,7 +229,10 @@ pub fn producer_to_consumer_20_percent_min_demand_test() {
   let events_subject = process.new_subject()
   let consumer = forwarder(events_subject)
 
-  consumer |> stage.subscribe(prod, 20, 100)
+  subscribe.consumer(consumer)
+  |> subscribe.min_demand(20)
+  |> subscribe.max_demand(100)
+  |> subscribe.to(prod)
 
   let batch = list.range(0, 79)
   assert_received(events_subject, batch, 20)
@@ -246,7 +256,10 @@ pub fn producer_to_consumer_0_min_1_max_demand_test() {
   let events_subject = process.new_subject()
   let consumer = forwarder(events_subject)
 
-  consumer |> stage.subscribe(prod, 0, 1)
+  subscribe.consumer(consumer)
+  |> subscribe.min_demand(0)
+  |> subscribe.max_demand(1)
+  |> subscribe.to(prod)
 
   assert_received(events_subject, [0], 20)
 
@@ -275,9 +288,16 @@ pub fn producer_to_producer_consumer_to_consumer_80_percent_min_demand_test() {
   let consumer_subject = process.new_subject()
   let consumer = forwarder(consumer_subject)
 
-  doubler.consumer_subject |> stage.subscribe(prod, 80, 100)
+  producer_consumer.as_consumer(doubler)
+  |> subscribe.consumer
+  |> subscribe.min_demand(80)
+  |> subscribe.max_demand(100)
+  |> subscribe.to(prod)
 
-  consumer |> stage.subscribe(doubler.producer_subject, 50, 100)
+  subscribe.consumer(consumer)
+  |> subscribe.min_demand(50)
+  |> subscribe.max_demand(100)
+  |> subscribe.through(doubler)
 
   let batch = list.range(0, 19)
   assert_received(doubler_subject, batch, 20)
@@ -307,9 +327,16 @@ pub fn producer_to_producer_consumer_to_consumer_20_percent_min_demand_test() {
   let consumer_subject = process.new_subject()
   let consumer = forwarder(consumer_subject)
 
-  doubler.consumer_subject |> stage.subscribe(prod, 20, 100)
+  producer_consumer.as_consumer(doubler)
+  |> subscribe.consumer
+  |> subscribe.min_demand(20)
+  |> subscribe.max_demand(100)
+  |> subscribe.to(prod)
 
-  consumer |> stage.subscribe(doubler.producer_subject, 50, 100)
+  subscribe.consumer(consumer)
+  |> subscribe.min_demand(50)
+  |> subscribe.max_demand(100)
+  |> subscribe.through(doubler)
 
   let batch = list.range(0, 79)
   assert_received(doubler_subject, batch, 20)
@@ -337,8 +364,13 @@ pub fn producer_to_producer_consumer_to_consumer_80_percent_min_demand_late_subs
   let consumer = forwarder(consumer_subject)
 
   // consumer first
-  consumer |> stage.subscribe(doubler.producer_subject, 50, 100)
-  doubler.consumer_subject |> stage.subscribe(prod, 80, 100)
+  subscribe.consumer(consumer)
+  |> subscribe.min_demand(50)
+  |> subscribe.max_demand(100)
+  |> subscribe.through(doubler)
+  |> subscribe.min_demand(80)
+  |> subscribe.max_demand(100)
+  |> subscribe.to(prod)
 
   let batch = list.range(0, 19)
   assert_received(doubler_subject, batch, 20)
@@ -368,9 +400,13 @@ pub fn producer_to_producer_consumer_to_consumer_20_percent_min_demand_late_subs
   let consumer_subject = process.new_subject()
   let consumer = forwarder(consumer_subject)
 
-  // consumer first
-  consumer |> stage.subscribe(doubler.producer_subject, 50, 100)
-  doubler.consumer_subject |> stage.subscribe(prod, 20, 100)
+  subscribe.consumer(consumer)
+  |> subscribe.min_demand(50)
+  |> subscribe.max_demand(100)
+  |> subscribe.through(doubler)
+  |> subscribe.min_demand(20)
+  |> subscribe.max_demand(100)
+  |> subscribe.to(prod)
 
   let batch = list.range(0, 79)
   assert_received(doubler_subject, batch, 20)
@@ -397,9 +433,13 @@ pub fn producer_to_producer_consumer_to_consumer_stops_asking_when_consumer_stop
   let sleeper_subject = process.new_subject()
   let sleeper = sleeper(sleeper_subject)
 
-  pass_through.consumer_subject |> stage.subscribe(prod, 8, 10)
-
-  sleeper |> stage.subscribe(pass_through.producer_subject, 5, 10)
+  subscribe.consumer(sleeper)
+  |> subscribe.min_demand(5)
+  |> subscribe.max_demand(10)
+  |> subscribe.through(pass_through)
+  |> subscribe.min_demand(8)
+  |> subscribe.max_demand(10)
+  |> subscribe.to(prod)
 
   assert_received(pass_through_subject, [0, 1], 20)
   assert_received(sleeper_subject, [0, 1], 20)
@@ -420,9 +460,14 @@ pub fn producer_to_producer_consumer_to_consumer_keeps_emitting_even_when_discar
   let forwarder_subject = process.new_subject()
   let forwarder = forwarder(forwarder_subject)
 
-  discarder.consumer_subject |> stage.subscribe(prod, 80, 100)
+  subscribe.consumer(forwarder)
+  |> subscribe.min_demand(50)
+  |> subscribe.max_demand(100)
+  |> subscribe.through(discarder)
+  |> subscribe.min_demand(80)
+  |> subscribe.max_demand(100)
+  |> subscribe.to(prod)
 
-  forwarder |> stage.subscribe(discarder.producer_subject, 50, 100)
   assert_received(discarder_subject, list.range(0, 19), 20)
   assert_received_eventually(discarder_subject, list.range(100, 119), 100)
   assert_received_eventually(discarder_subject, list.range(1000, 1019), 100)

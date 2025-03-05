@@ -9,6 +9,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
 import gleam/result
 import gleam/set.{type Set}
+import kino/stage.{type Produce, Done, Next}
 import kino/stage/internal/batch.{type Batch, type Demand, Batch, Demand}
 import kino/stage/internal/buffer.{type Buffer, Take}
 import logging
@@ -36,10 +37,10 @@ type ConsumerMessage(event) {
   ProducerDown(producer: Subject(ProducerMessage(event)))
 }
 
-pub type Produce(state, event) {
-  Next(elements: List(event), state: state)
-  Done
-}
+// pub type Produce(state, event) {
+//   Next(elements: List(event), state: state)
+//   Done
+// }
 
 pub type BufferStrategy {
   KeepFirst
@@ -62,16 +63,24 @@ pub opaque type ProducerConsumer(in, out) {
   )
 }
 
+pub fn as_consumer(producer_consumer: ProducerConsumer(in, out)) {
+  Consumer(producer_consumer.consumer_subject)
+}
+
+pub fn as_producer(producer_consumer: ProducerConsumer(in, out)) {
+  Producer(producer_consumer.producer_subject)
+}
+
 // ------------------------------
 // Producer
 // ------------------------------
 
 pub fn start_producer(
-  init: fn() -> state,
-  init_timeout: Int,
-  pull: fn(state, Int) -> Produce(state, event),
-  buffer_strategy: BufferStrategy,
-  buffer_capacity: Int,
+  init init: fn() -> state,
+  init_timeout init_timeout: Int,
+  pull pull: fn(state, Int) -> Produce(state, event),
+  buffer_strategy buffer_strategy: BufferStrategy,
+  buffer_capacity buffer_capacity: Int,
 ) -> Result(Producer(event), StartError) {
   let ack = process.new_subject()
   actor.start_spec(actor.Spec(
@@ -244,10 +253,11 @@ fn producer_dispatch_events(
 // ------------------------------
 
 pub fn start_consumer(
-  init: fn() -> state,
-  init_timeout: Int,
-  handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
-  on_shutdown: fn(state) -> Nil,
+  init init: fn() -> state,
+  init_timeout init_timeout: Int,
+  handle_events handle_events: fn(state, List(event)) ->
+    actor.Next(List(event), state),
+  on_shutdown on_shutdown: fn(state) -> Nil,
 ) -> Result(Consumer(event), StartError) {
   let ack = process.new_subject()
   actor.start_spec(actor.Spec(
@@ -378,11 +388,11 @@ fn consumer_dispatch(
 // ----------------
 
 pub fn start_producer_consumer(
-  init: fn() -> state,
-  init_timeout: Int,
-  handle_events: fn(state, List(in)) -> Produce(state, out),
-  buffer_strategy: BufferStrategy,
-  buffer_capacity: Option(Int),
+  init init: fn() -> state,
+  init_timeout init_timeout: Int,
+  handle_events handle_events: fn(state, List(in)) -> Produce(state, out),
+  buffer_strategy buffer_strategy: BufferStrategy,
+  buffer_capacity buffer_capacity: Option(Int),
 ) -> Result(ProducerConsumer(in, out), StartError) {
   let ack = process.new_subject()
   actor.start_spec(actor.Spec(

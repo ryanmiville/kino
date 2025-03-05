@@ -1,16 +1,11 @@
-import gleam/erlang/process.{type Subject}
 import gleam/option.{type Option, None, Some}
-import kino/stage.{type ConsumerMessage, type ProducerMessage}
+import kino/stage/internal/stage.{type Consumer, type Producer}
 
 pub opaque type Subscription(event) {
-  Subscription(
-    to: Subject(ProducerMessage(event)),
-    min_demand: Option(Int),
-    max_demand: Int,
-  )
+  Subscription(to: Producer(event), min_demand: Option(Int), max_demand: Int)
 }
 
-pub fn to(producer: Subject(ProducerMessage(event))) {
+pub fn to(producer: Producer(event)) {
   Subscription(producer, None, 1000)
 }
 
@@ -23,10 +18,10 @@ pub fn max_demand(builder: Subscription(event), max_demand: Int) {
 }
 
 pub fn subscribe(
-  consumer consumer: Subject(ConsumerMessage(event)),
+  consumer consumer: Consumer(event),
   to subscription: Subscription(event),
 ) {
   let Subscription(to:, min_demand:, max_demand:) = subscription
   let min_demand = option.unwrap(min_demand, max_demand / 2)
-  process.send(consumer, stage.ConsumerSubscribe(to, min_demand, max_demand))
+  stage.subscribe(consumer, to, min_demand, max_demand)
 }
