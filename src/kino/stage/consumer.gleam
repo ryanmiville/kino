@@ -1,13 +1,15 @@
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type ProcessMonitor, type Selector, type Subject}
 import gleam/function
+import gleam/list
 import gleam/otp/actor.{type StartError}
 import gleam/result
 import kino/stage.{
-  type ConsumerMessage, ConsumerSubscribe, ConsumerUnsubscribe, NewEvents,
-  ProducerDown,
+  type ConsumerMessage, type ProducerMessage, ConsumerSubscribe,
+  ConsumerUnsubscribe, NewEvents, ProducerDown,
 }
 import kino/stage/internal/batch.{type Batch, type Demand, Batch, Demand}
+import kino/stage/internal/subscription.{type Subscription}
 
 pub type Consumer(event) =
   Subject(ConsumerMessage(event))
@@ -16,6 +18,7 @@ pub opaque type Builder(state, event) {
   Builder(
     init: fn() -> state,
     init_timeout: Int,
+    subscriptions: List(Subscription(event)),
     handle_events: fn(state, List(event)) -> actor.Next(List(event), state),
     on_shutdown: fn(state) -> Nil,
   )
@@ -25,6 +28,7 @@ pub fn new(state: state) -> Builder(state, event) {
   Builder(
     init: fn() { state },
     init_timeout: 1000,
+    subscriptions: [],
     handle_events: fn(_, _) { actor.Stop(process.Normal) },
     on_shutdown: fn(_) { Nil },
   )
@@ -34,6 +38,7 @@ pub fn new_with_init(timeout: Int, init: fn() -> state) -> Builder(state, event)
   Builder(
     init: init,
     init_timeout: timeout,
+    subscriptions: [],
     handle_events: fn(_, _) { actor.Stop(process.Normal) },
     on_shutdown: fn(_) { Nil },
   )
@@ -53,7 +58,42 @@ pub fn on_shutdown(
   Builder(..builder, on_shutdown:)
 }
 
+pub fn subscribe(
+  to producer: Subject(ProducerMessage(event)),
+) -> Subscription(event) {
+  subscription.to(producer)
+}
+
+pub fn min_demand(
+  subscription: Subscription(event),
+  min_demand: Int,
+) -> Subscription(event) {
+  subscription.min_demand(subscription, min_demand)
+}
+
+pub fn max_demand(
+  subscription: Subscription(event),
+  max_demand: Int,
+) -> Subscription(event) {
+  subscription.max_demand(subscription, max_demand)
+}
+
+pub fn add_subscription(
+  builder: Builder(state, event),
+  subscription: Subscription(event),
+) -> Builder(state, event) {
+  Builder(..builder, subscriptions: [subscription, ..builder.subscriptions])
+}
+
 pub fn start(
+  builder: Builder(state, event),
+) -> Result(Consumer(event), StartError) {
+  use con <- result.map(do_start(builder))
+  list.each(builder.subscriptions, subscription.subscribe(con, _))
+  con
+}
+
+fn do_start(
   builder: Builder(state, event),
 ) -> Result(Consumer(event), StartError) {
   let ack = process.new_subject()

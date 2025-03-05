@@ -1,12 +1,7 @@
-import gleam/erlang/process
-import gleam/list
-import gleam/otp/actor
-import gleeunit/should
-import kino/stage.{Next}
 import kino/stage/consumer.{type Consumer}
 import kino/stage/producer.{type Producer}
 import kino/stage/producer_consumer.{type ProducerConsumer}
-import kino/stage/subscribe.{type Complete, type Flow, type Source}
+import kino/stage/subscribe
 
 fn producer() -> Producer(a) {
   let assert Ok(prod) = producer.new(0) |> producer.start
@@ -32,19 +27,11 @@ fn stages() -> #(Producer(a), ProducerConsumer(a, b), Consumer(b)) {
 
 pub fn bottom_up_test() {
   let #(prod, pc, con) = stages()
-  let _: Complete =
-    subscribe.sink(con) |> subscribe.through(pc) |> subscribe.to(prod)
-}
-
-pub fn flow_up_test() {
-  let #(prod, pc, con) = stages()
-  let source: Source(String) = subscribe.flow(pc) |> subscribe.to(prod)
-  let _: Complete = subscribe.sink(con) |> subscribe.to_source(source)
-}
-
-pub fn flow_sink_source_test() {
-  let #(prod, pc, con) = stages()
-  let flow: Flow(Int, String) = subscribe.flow(pc)
-  let _: Complete =
-    subscribe.sink(con) |> subscribe.through_flow(flow) |> subscribe.to(prod)
+  let _: Nil =
+    subscribe.consumer(con)
+    |> subscribe.max_demand(10)
+    |> subscribe.through(pc)
+    |> subscribe.max_demand(10)
+    |> subscribe.min_demand(7)
+    |> subscribe.to(prod)
 }

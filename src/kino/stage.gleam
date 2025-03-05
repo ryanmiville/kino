@@ -1,21 +1,5 @@
 import gleam/erlang/process.{type Subject}
 
-// pub opaque type Producer(event) {
-//   Producer(Subject(ProducerMessage(event)))
-// }
-
-// pub opaque type ProducerConsumer(in, out) {
-//   ProducerConsumer(
-//     subject: Subject(ProducerConsumerMessage(in, out)),
-//     consumer_subject: Subject(ConsumerMessage(in)),
-//     producer_subject: Subject(ProducerMessage(out)),
-//   )
-// }
-
-// pub opaque type Consumer(event) {
-//   Consumer(Subject(ConsumerMessage(event)))
-// }
-
 pub type ProducerMessage(event) {
   Ask(demand: Int, consumer: Subject(ConsumerMessage(event)))
   Subscribe(consumer: Subject(ConsumerMessage(event)), demand: Int)

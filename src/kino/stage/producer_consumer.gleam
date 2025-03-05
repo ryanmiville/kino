@@ -17,6 +17,7 @@ import kino/stage.{
 import kino/stage/internal/batch.{type Batch, type Demand, Batch, Demand}
 import kino/stage/internal/buffer.{type Buffer, type Take, Take}
 import kino/stage/internal/dispatcher.{type DemandDispatcher}
+import kino/stage/internal/subscribe.{type Subscription}
 
 pub type ProducerConsumer(in, out) {
   ProducerConsumer(
@@ -26,10 +27,23 @@ pub type ProducerConsumer(in, out) {
   )
 }
 
+pub fn as_consumer(
+  producer_consumer: ProducerConsumer(in, out),
+) -> Subject(ConsumerMessage(in)) {
+  producer_consumer.consumer_subject
+}
+
+pub fn as_producer(
+  producer_consumer: ProducerConsumer(in, out),
+) -> Subject(ProducerMessage(out)) {
+  producer_consumer.producer_subject
+}
+
 pub opaque type Builder(state, in, out) {
   Builder(
     init: fn() -> state,
     init_timeout: Int,
+    subscriptions: List(Subscription(in)),
     handle_events: fn(state, List(in)) -> Produce(state, out),
     buffer_strategy: BufferStrategy,
     buffer_capacity: Option(Int),
@@ -40,6 +54,7 @@ pub fn new(state: state) -> Builder(state, in, out) {
   Builder(
     init: fn() { state },
     init_timeout: 1000,
+    subscriptions: [],
     handle_events: fn(_, _) { Done },
     buffer_strategy: stage.KeepLast,
     buffer_capacity: None,
@@ -53,6 +68,7 @@ pub fn new_with_init(
   Builder(
     init: init,
     init_timeout: timeout,
+    subscriptions: [],
     handle_events: fn(_, _) { Done },
     buffer_strategy: stage.KeepLast,
     buffer_capacity: None,
@@ -80,7 +96,41 @@ pub fn buffer_capacity(
   Builder(..builder, buffer_capacity: Some(buffer_capacity))
 }
 
+pub fn subscribe(to producer: Subject(ProducerMessage(in))) -> Subscription(in) {
+  subscribe.to(producer)
+}
+
+pub fn min_demand(
+  subscription: Subscription(in),
+  min_demand: Int,
+) -> Subscription(in) {
+  subscribe.min_demand(subscription, min_demand)
+}
+
+pub fn max_demand(
+  subscription: Subscription(in),
+  max_demand: Int,
+) -> Subscription(in) {
+  subscribe.max_demand(subscription, max_demand)
+}
+
+pub fn add_subscription(
+  builder: Builder(state, in, out),
+  subscription: Subscription(in),
+) -> Builder(state, in, out) {
+  Builder(..builder, subscriptions: [subscription, ..builder.subscriptions])
+}
+
 pub fn start(
+  builder: Builder(state, in, out),
+) -> Result(ProducerConsumer(in, out), StartError) {
+  use pc <- result.map(do_start(builder))
+  let con = as_consumer(pc)
+  list.each(builder.subscriptions, subscribe.start(_, con))
+  pc
+}
+
+fn do_start(
   builder: Builder(state, in, out),
 ) -> Result(ProducerConsumer(in, out), StartError) {
   let ack = process.new_subject()
