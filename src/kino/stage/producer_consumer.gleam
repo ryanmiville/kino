@@ -17,7 +17,7 @@ import kino/stage.{
 import kino/stage/internal/batch.{type Batch, type Demand, Batch, Demand}
 import kino/stage/internal/buffer.{type Buffer, type Take, Take}
 import kino/stage/internal/dispatcher.{type DemandDispatcher}
-import kino/stage/internal/subscribe.{type Subscription}
+import kino/stage/internal/subscription.{type Subscription}
 
 pub type ProducerConsumer(in, out) {
   ProducerConsumer(
@@ -97,21 +97,21 @@ pub fn buffer_capacity(
 }
 
 pub fn subscribe(to producer: Subject(ProducerMessage(in))) -> Subscription(in) {
-  subscribe.to(producer)
+  subscription.to(producer)
 }
 
 pub fn min_demand(
   subscription: Subscription(in),
   min_demand: Int,
 ) -> Subscription(in) {
-  subscribe.min_demand(subscription, min_demand)
+  subscription.min_demand(subscription, min_demand)
 }
 
 pub fn max_demand(
   subscription: Subscription(in),
   max_demand: Int,
 ) -> Subscription(in) {
-  subscribe.max_demand(subscription, max_demand)
+  subscription.max_demand(subscription, max_demand)
 }
 
 pub fn add_subscription(
@@ -126,7 +126,7 @@ pub fn start(
 ) -> Result(ProducerConsumer(in, out), StartError) {
   use pc <- result.map(do_start(builder))
   let con = as_consumer(pc)
-  list.each(builder.subscriptions, subscribe.start(_, con))
+  list.each(builder.subscriptions, subscription.subscribe(con, _))
   pc
 }
 
