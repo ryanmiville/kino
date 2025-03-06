@@ -1,18 +1,22 @@
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
-import kino/stage.{type Produce, Done} as _
-import kino/stage/internal/stage
-import kino/stage/internal/subscription.{type Subscription}
+import kino/internal/stage
+import kino/internal/subscription.{type Subscription}
 
-pub type ProducerConsumer(in, out) =
-  stage.ProducerConsumer(in, out)
+pub type Processor(in, out) =
+  stage.Processor(in, out)
 
-pub fn as_consumer(producer_consumer: ProducerConsumer(in, out)) {
-  stage.as_consumer(producer_consumer)
+pub fn as_consumer(processor: Processor(in, out)) {
+  stage.as_consumer(processor)
 }
 
-pub fn as_producer(producer_consumer: ProducerConsumer(in, out)) {
-  stage.as_producer(producer_consumer)
+pub fn as_producer(processor: Processor(in, out)) {
+  stage.as_producer(processor)
+}
+
+pub type Produce(state, event) {
+  Next(events: List(event), state: state)
+  Done
 }
 
 pub type BufferStrategy {
@@ -77,10 +81,6 @@ pub fn buffer_capacity(
   Builder(..builder, buffer_capacity: Some(buffer_capacity))
 }
 
-// pub fn subscribe(to producer: Subject(ProducerMessage(in))) -> Subscription(in) {
-//   subscription.to(producer)
-// }
-
 pub fn min_demand(
   subscription: Subscription(in),
   min_demand: Int,
@@ -104,11 +104,11 @@ pub fn add_subscription(
 
 pub fn start(
   builder: Builder(state, in, out),
-) -> Result(ProducerConsumer(in, out), StartError) {
-  stage.start_producer_consumer(
+) -> Result(Processor(in, out), StartError) {
+  stage.start_processor(
     init: builder.init,
     init_timeout: builder.init_timeout,
-    handle_events: builder.handle_events,
+    handle_events: convert_handle(builder.handle_events),
     buffer_strategy: convert_buffer_strategy(builder.buffer_strategy),
     buffer_capacity: builder.buffer_capacity,
   )
@@ -118,5 +118,21 @@ fn convert_buffer_strategy(strategy: BufferStrategy) -> stage.BufferStrategy {
   case strategy {
     KeepFirst -> stage.KeepFirst
     KeepLast -> stage.KeepLast
+  }
+}
+
+fn convert_handle(handle_events: fn(state, List(in)) -> Produce(state, out)) {
+  fn(state, events) {
+    handle_events(state, events)
+    |> convert_produce
+  }
+}
+
+fn convert_produce(
+  produce: Produce(state, event),
+) -> stage.Produce(state, event) {
+  case produce {
+    Next(events, state) -> stage.Next(events, state)
+    Done -> stage.Done
   }
 }

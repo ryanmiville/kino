@@ -1,9 +1,13 @@
 import gleam/otp/actor.{type StartError}
-import kino/stage.{type Produce, Done} as _
-import kino/stage/internal/stage
+import kino/internal/stage
 
 pub type Producer(event) =
   stage.Producer(event)
+
+pub type Produce(state, event) {
+  Next(events: List(event), state: state)
+  Done
+}
 
 pub type BufferStrategy {
   KeepFirst
@@ -67,7 +71,7 @@ pub fn start(
   stage.start_producer(
     init: builder.init,
     init_timeout: builder.init_timeout,
-    pull: builder.pull,
+    pull: convert_pull(builder.pull),
     buffer_strategy: convert_buffer_strategy(builder.buffer_strategy),
     buffer_capacity: builder.buffer_capacity,
   )
@@ -77,5 +81,21 @@ fn convert_buffer_strategy(strategy: BufferStrategy) -> stage.BufferStrategy {
   case strategy {
     KeepFirst -> stage.KeepFirst
     KeepLast -> stage.KeepLast
+  }
+}
+
+fn convert_pull(pull: fn(state, Int) -> Produce(state, event)) {
+  fn(state, events) {
+    pull(state, events)
+    |> convert_produce
+  }
+}
+
+fn convert_produce(
+  produce: Produce(state, event),
+) -> stage.Produce(state, event) {
+  case produce {
+    Next(events, state) -> stage.Next(events, state)
+    Done -> stage.Done
   }
 }

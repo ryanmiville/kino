@@ -1,8 +1,7 @@
 import gleam/erlang/process
 import gleam/otp/actor.{type StartError}
-import gleam/result
-import kino/stage/internal/stage
-import kino/stage/internal/subscription.{type Subscription}
+import kino/internal/stage
+import kino/internal/subscription.{type Subscription}
 
 pub type Consumer(event) =
   stage.Consumer(event)
@@ -51,26 +50,6 @@ pub fn on_shutdown(
   Builder(..builder, on_shutdown:)
 }
 
-// pub fn subscribe(
-//   to producer: Subject(ProducerMessage(event)),
-// ) -> Subscription(event) {
-//   subscription.to(producer)
-// }
-
-pub fn min_demand(
-  subscription: Subscription(event),
-  min_demand: Int,
-) -> Subscription(event) {
-  subscription.min_demand(subscription, min_demand)
-}
-
-pub fn max_demand(
-  subscription: Subscription(event),
-  max_demand: Int,
-) -> Subscription(event) {
-  subscription.max_demand(subscription, max_demand)
-}
-
 pub fn add_subscription(
   builder: Builder(state, event),
   subscription: Subscription(event),
@@ -81,14 +60,10 @@ pub fn add_subscription(
 pub fn start(
   builder: Builder(state, event),
 ) -> Result(Consumer(event), StartError) {
-  let consumer =
-    stage.start_consumer(
-      init: builder.init,
-      init_timeout: builder.init_timeout,
-      handle_events: builder.handle_events,
-      on_shutdown: builder.on_shutdown,
-    )
-  use consumer <- result.map(consumer)
-  // list.each(builder.subscriptions, subscription.subscribe(consumer, _))
-  consumer
+  stage.start_consumer(
+    init: builder.init,
+    init_timeout: builder.init_timeout,
+    handle_events: builder.handle_events,
+    on_shutdown: builder.on_shutdown,
+  )
 }

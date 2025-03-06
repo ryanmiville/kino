@@ -1,5 +1,5 @@
 import gleam/option.{type Option, None, Some}
-import kino/stage/internal/stage.{type Consumer, type Producer}
+import kino/internal/stage.{type Consumer, type Producer}
 
 pub opaque type Subscription(event) {
   Subscription(to: Producer(event), min_demand: Option(Int), max_demand: Int)

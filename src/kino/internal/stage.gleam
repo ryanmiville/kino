@@ -9,9 +9,8 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
 import gleam/result
 import gleam/set.{type Set}
-import kino/stage.{type Produce, Done, Next}
-import kino/stage/internal/batch.{type Batch, type Demand, Batch, Demand}
-import kino/stage/internal/buffer.{type Buffer, Take}
+import kino/internal/batch.{type Batch, type Demand, Batch, Demand}
+import kino/internal/buffer.{type Buffer, Take}
 import logging
 
 type ProducerMessage(event) {
@@ -21,7 +20,7 @@ type ProducerMessage(event) {
   ConsumerDown(consumer: Subject(ConsumerMessage(event)))
 }
 
-type ProducerConsumerMessage(in, out) {
+type ProcessorMessage(in, out) {
   ConsumerMessage(ConsumerMessage(in))
   ProducerMessage(ProducerMessage(out))
 }
@@ -37,10 +36,10 @@ type ConsumerMessage(event) {
   ProducerDown(producer: Subject(ProducerMessage(event)))
 }
 
-// pub type Produce(state, event) {
-//   Next(elements: List(event), state: state)
-//   Done
-// }
+pub type Produce(state, event) {
+  Next(events: List(event), state: state)
+  Done
+}
 
 pub type BufferStrategy {
   KeepFirst
@@ -55,20 +54,20 @@ pub opaque type Producer(event) {
   Producer(subject: Subject(ProducerMessage(event)))
 }
 
-pub opaque type ProducerConsumer(in, out) {
-  ProducerConsumer(
-    subject: Subject(ProducerConsumerMessage(in, out)),
+pub opaque type Processor(in, out) {
+  Processor(
+    subject: Subject(ProcessorMessage(in, out)),
     consumer_subject: Subject(ConsumerMessage(in)),
     producer_subject: Subject(ProducerMessage(out)),
   )
 }
 
-pub fn as_consumer(producer_consumer: ProducerConsumer(in, out)) {
-  Consumer(producer_consumer.consumer_subject)
+pub fn as_consumer(processor: Processor(in, out)) {
+  Consumer(processor.consumer_subject)
 }
 
-pub fn as_producer(producer_consumer: ProducerConsumer(in, out)) {
-  Producer(producer_consumer.producer_subject)
+pub fn as_producer(processor: Processor(in, out)) {
+  Producer(processor.producer_subject)
 }
 
 // ------------------------------
@@ -384,16 +383,16 @@ fn consumer_dispatch(
 }
 
 // ----------------
-// ProducerConsumer
+// Processor
 // ----------------
 
-pub fn start_producer_consumer(
+pub fn start_processor(
   init init: fn() -> state,
   init_timeout init_timeout: Int,
   handle_events handle_events: fn(state, List(in)) -> Produce(state, out),
   buffer_strategy buffer_strategy: BufferStrategy,
   buffer_capacity buffer_capacity: Option(Int),
-) -> Result(ProducerConsumer(in, out), StartError) {
+) -> Result(Processor(in, out), StartError) {
   let ack = process.new_subject()
   actor.start_spec(actor.Spec(
     init: fn() {
@@ -425,7 +424,7 @@ pub fn start_producer_consumer(
 
       process.send(ack, #(self, consumer_self, producer_self))
       let state =
-        ProducerConsumerState(
+        ProcessorState(
           self:,
           consumer_self:,
           producer_self:,
@@ -442,21 +441,21 @@ pub fn start_producer_consumer(
         )
       actor.Ready(state, selector)
     },
-    loop: pc_on_message,
+    loop: processor_on_message,
     init_timeout: init_timeout,
   ))
   |> result.map(fn(_) {
     let #(self, consumer_self, producer_self) = process.receive_forever(ack)
-    ProducerConsumer(self, consumer_self, producer_self)
+    Processor(self, consumer_self, producer_self)
   })
 }
 
-type ProducerConsumerState(state, in, out) {
-  ProducerConsumerState(
-    self: Subject(ProducerConsumerMessage(in, out)),
+type ProcessorState(state, in, out) {
+  ProcessorState(
+    self: Subject(ProcessorMessage(in, out)),
     consumer_self: Subject(ConsumerMessage(in)),
     producer_self: Subject(ProducerMessage(out)),
-    selector: Selector(ProducerConsumerMessage(in, out)),
+    selector: Selector(ProcessorMessage(in, out)),
     state: state,
     buffer: Buffer(out),
     dispatcher: DemandDispatcher(out),
@@ -473,19 +472,19 @@ type Events(in) {
   Events(queue: Deque(#(List(in), Subject(ProducerMessage(in)))), demand: Int)
 }
 
-fn pc_on_message(
-  message: ProducerConsumerMessage(in, out),
-  state: ProducerConsumerState(state, in, out),
+fn processor_on_message(
+  message: ProcessorMessage(in, out),
+  state: ProcessorState(state, in, out),
 ) {
   case message {
-    ProducerMessage(message) -> pc_producer_on_message(message, state)
-    ConsumerMessage(message) -> pc_consumer_on_message(message, state)
+    ProducerMessage(message) -> processor_producer_on_message(message, state)
+    ConsumerMessage(message) -> processor_consumer_on_message(message, state)
   }
 }
 
-fn pc_producer_on_message(
+fn processor_producer_on_message(
   message: ProducerMessage(out),
-  state: ProducerConsumerState(state, in, out),
+  state: ProcessorState(state, in, out),
 ) {
   case message {
     Subscribe(consumer, demand) -> {
@@ -501,7 +500,7 @@ fn pc_producer_on_message(
       let dispatcher = dispatcher_subscribe(state.dispatcher, consumer)
       let monitors = state.consumer_monitors |> dict.insert(consumer, mon)
       let state =
-        ProducerConsumerState(
+        ProcessorState(
           ..state,
           selector:,
           consumers:,
@@ -517,13 +516,9 @@ fn pc_producer_on_message(
       let Events(queue, demand) = state.events
       let counter = counter + demand
       let state =
-        ProducerConsumerState(
-          ..state,
-          dispatcher:,
-          events: Events(queue, counter),
-        )
+        ProcessorState(..state, dispatcher:, events: Events(queue, counter))
 
-      let #(_, state) = pc_take_from_buffer(counter, state)
+      let #(_, state) = processor_take_from_buffer(counter, state)
       let Events(queue, demand) = state.events
       take_events(queue, demand, state)
     }
@@ -538,7 +533,7 @@ fn pc_producer_on_message(
       }
       let dispatcher = dispatcher_cancel(state.dispatcher, consumer)
       let state =
-        ProducerConsumerState(
+        ProcessorState(
           ..state,
           consumers:,
           dispatcher:,
@@ -551,7 +546,7 @@ fn pc_producer_on_message(
       let monitors = dict.delete(state.consumer_monitors, consumer)
       let dispatcher = dispatcher_cancel(state.dispatcher, consumer)
       let state =
-        ProducerConsumerState(
+        ProcessorState(
           ..state,
           consumers:,
           dispatcher:,
@@ -562,9 +557,9 @@ fn pc_producer_on_message(
   }
 }
 
-fn pc_consumer_on_message(
+fn processor_consumer_on_message(
   message: ConsumerMessage(in),
-  state: ProducerConsumerState(state, in, out),
+  state: ProcessorState(state, in, out),
 ) {
   case message {
     ConsumerSubscribe(source, min, max) -> {
@@ -579,7 +574,7 @@ fn pc_consumer_on_message(
         |> process.merge_selector(state.selector)
       let monitors = state.producer_monitors |> dict.insert(source, mon)
       let state =
-        ProducerConsumerState(
+        ProcessorState(
           ..state,
           selector:,
           producers:,
@@ -602,7 +597,7 @@ fn pc_consumer_on_message(
         _ -> state.producer_monitors
       }
       let state =
-        ProducerConsumerState(..state, producers:, producer_monitors: monitors)
+        ProcessorState(..state, producers:, producer_monitors: monitors)
       process.send(source, Unsubscribe(state.consumer_self))
       actor.continue(state)
     }
@@ -610,21 +605,21 @@ fn pc_consumer_on_message(
       let producers = dict.delete(state.producers, source)
       let monitors = dict.delete(state.producer_monitors, source)
       let state =
-        ProducerConsumerState(..state, producers:, producer_monitors: monitors)
+        ProcessorState(..state, producers:, producer_monitors: monitors)
       actor.continue(state)
     }
   }
 }
 
-fn pc_dispatch_events(
-  state: ProducerConsumerState(state, in, out),
+fn processor_dispatch_events(
+  state: ProcessorState(state, in, out),
   events: List(out),
   length: Int,
 ) {
   use <- bool.guard(events == [], { state })
   use <- bool.lazy_guard(set.is_empty(state.consumers), fn() {
     let buffer = buffer.store(state.buffer, events)
-    ProducerConsumerState(..state, buffer:)
+    ProcessorState(..state, buffer:)
   })
   let #(events, dispatcher) =
     dispatch(state.dispatcher, state.producer_self, events, length)
@@ -633,7 +628,7 @@ fn pc_dispatch_events(
   let demand = demand - { length - list.length(events) }
 
   let buffer = buffer.store(state.buffer, events)
-  ProducerConsumerState(
+  ProcessorState(
     ..state,
     buffer: buffer,
     dispatcher: dispatcher,
@@ -644,18 +639,15 @@ fn pc_dispatch_events(
 fn take_events(
   queue: Deque(#(List(in), Subject(ProducerMessage(in)))),
   counter: Int,
-  state: ProducerConsumerState(state, in, out),
-) -> actor.Next(
-  ProducerConsumerMessage(in, out),
-  ProducerConsumerState(state, in, out),
-) {
+  state: ProcessorState(state, in, out),
+) -> actor.Next(ProcessorMessage(in, out), ProcessorState(state, in, out)) {
   use <- bool.lazy_guard(counter <= 0, fn() {
-    let state = ProducerConsumerState(..state, events: Events(queue, counter))
+    let state = ProcessorState(..state, events: Events(queue, counter))
     actor.continue(state)
   })
   case deque.pop_front(queue) {
     Ok(#(#(events, from), queue)) -> {
-      let state = ProducerConsumerState(..state, events: Events(queue, counter))
+      let state = ProcessorState(..state, events: Events(queue, counter))
       case send_events(events, from, state) {
         actor.Continue(state, _) ->
           take_events(state.events.queue, state.events.demand, state)
@@ -663,9 +655,7 @@ fn take_events(
       }
     }
     Error(_) -> {
-      actor.continue(
-        ProducerConsumerState(..state, events: Events(queue, counter)),
-      )
+      actor.continue(ProcessorState(..state, events: Events(queue, counter)))
     }
   }
 }
@@ -673,44 +663,39 @@ fn take_events(
 fn send_events(
   events: List(in),
   from: Subject(ProducerMessage(in)),
-  state: ProducerConsumerState(state, in, out),
-) -> actor.Next(
-  ProducerConsumerMessage(in, out),
-  ProducerConsumerState(state, in, out),
-) {
+  state: ProcessorState(state, in, out),
+) -> actor.Next(ProcessorMessage(in, out), ProcessorState(state, in, out)) {
   case dict.get(state.producers, from) {
     Ok(demand) -> {
       let #(current, batches) = batch.events(events, demand)
       let demand = Demand(..demand, current:)
       let producers = dict.insert(state.producers, from, demand)
-      let state = ProducerConsumerState(..state, producers:)
-      pc_dispatch(state, batches, from)
+      let state = ProcessorState(..state, producers:)
+      processor_dispatch(state, batches, from)
     }
     Error(_) -> {
       // We queued but producer was removed
       let batches = [Batch(events, 0)]
-      pc_dispatch(state, batches, from)
+      processor_dispatch(state, batches, from)
     }
   }
 }
 
-fn pc_dispatch(
-  state: ProducerConsumerState(state, in, out),
+fn processor_dispatch(
+  state: ProcessorState(state, in, out),
   batches: List(Batch(in)),
   from: Subject(ProducerMessage(in)),
-) -> actor.Next(
-  ProducerConsumerMessage(in, out),
-  ProducerConsumerState(state, in, out),
-) {
+) -> actor.Next(ProcessorMessage(in, out), ProcessorState(state, in, out)) {
   case batches {
     [] -> actor.continue(state)
     [Batch(events, size), ..rest] -> {
       case state.handle_events(state.state, events) {
         Next(events, new_state) -> {
-          let state = ProducerConsumerState(..state, state: new_state)
-          let state = pc_dispatch_events(state, events, list.length(events))
+          let state = ProcessorState(..state, state: new_state)
+          let state =
+            processor_dispatch_events(state, events, list.length(events))
           process.send(from, Ask(size, state.consumer_self))
-          pc_dispatch(state, rest, from)
+          processor_dispatch(state, rest, from)
         }
         Done -> actor.Stop(process.Normal)
       }
@@ -718,21 +703,21 @@ fn pc_dispatch(
   }
 }
 
-fn pc_take_from_buffer(
+fn processor_take_from_buffer(
   demand: Int,
-  state: ProducerConsumerState(state, in, out),
-) -> #(Int, ProducerConsumerState(state, in, out)) {
+  state: ProcessorState(state, in, out),
+) -> #(Int, ProcessorState(state, in, out)) {
   let Take(buffer, demand_left, events) = buffer.take(state.buffer, demand)
   case events {
     [] -> #(demand, state)
     _ -> {
       let state =
-        pc_dispatch_events(
-          ProducerConsumerState(..state, buffer:),
+        processor_dispatch_events(
+          ProcessorState(..state, buffer:),
           events,
           demand - demand_left,
         )
-      pc_take_from_buffer(demand_left, state)
+      processor_take_from_buffer(demand_left, state)
     }
   }
 }

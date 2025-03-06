@@ -3,7 +3,7 @@
 // import gleam/int
 // import gleam/list
 // import gleam/option.{type Option, None, Some}
-// import kino/stage.{type ConsumerMessage, type ProducerMessage, NewEvents}
+// import kino.{type ConsumerMessage, type ProducerMessage, NewEvents}
 // import logging
 
 // pub type Demand(event) =
