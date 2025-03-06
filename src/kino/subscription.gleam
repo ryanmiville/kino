@@ -16,18 +16,18 @@ pub fn from(consumer: Consumer(event)) -> Subscription(event) {
   Subscription(consumer:, min_demand: None, max_demand: 1000)
 }
 
-pub fn with_max_demand(builder: Subscription(event), max_demand: Int) {
+pub fn with_max_demand(
+  builder: Subscription(event),
+  max_demand: Int,
+) -> Subscription(event) {
   Subscription(..builder, max_demand:)
 }
 
-pub fn with_min_demand(builder: Subscription(event), min_demand: Int) {
+pub fn with_min_demand(
+  builder: Subscription(event),
+  min_demand: Int,
+) -> Subscription(event) {
   Subscription(..builder, min_demand: Some(min_demand))
-}
-
-pub fn to(builder: Subscription(event), producer: Producer(event)) {
-  let Subscription(consumer:, min_demand:, max_demand:) = builder
-  let min_demand = option.unwrap(min_demand, max_demand / 2)
-  stage.subscribe(consumer, producer, min_demand, max_demand)
 }
 
 pub fn through(
@@ -36,4 +36,10 @@ pub fn through(
 ) -> Subscription(a) {
   to(builder, processor.as_producer(pc))
   from(processor.as_consumer(pc))
+}
+
+pub fn to(builder: Subscription(event), producer: Producer(event)) -> Nil {
+  let Subscription(consumer:, min_demand:, max_demand:) = builder
+  let min_demand = option.unwrap(min_demand, max_demand / 2)
+  stage.subscribe(consumer, producer, min_demand, max_demand)
 }

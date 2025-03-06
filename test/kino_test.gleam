@@ -15,6 +15,15 @@ pub fn main() {
   gleeunit.main()
 }
 
+// fn single(initial_state: Int) -> producer.Producer(Int) {
+//   let pull = fn(state, _demand) { producer.Next([state], state + 1) }
+//   let assert Ok(prod) =
+//     producer.new(initial_state)
+//     |> producer.pull(pull)
+//     |> producer.start
+//   prod
+// }
+
 fn counter(initial_state: Int) -> producer.Producer(Int) {
   let pull = fn(state, demand) {
     let events = list.range(state, state + demand - 1)
@@ -395,6 +404,17 @@ pub fn producer_to_processor_to_consumer_keeps_emitting_even_when_discarded_test
   assert_received_eventually(discarder_subject, list.range(100, 119), 100)
   assert_received_eventually(discarder_subject, list.range(1000, 1019), 100)
 }
+
+// pub fn single_test() {
+//   let prod = single(0)
+//   let subject = process.new_subject()
+//   let cons = forwarder(subject)
+//   subscription.from(cons) |> subscription.to(prod)
+
+//   assert_received(subject, [0], 20)
+//   assert_received(subject, [1], 20)
+//   assert_received(subject, [3], 20)
+// }
 
 // pub fn producer_to_processor_to_consumer_with_broadcast_demand_test() {
 //   logging.log(
