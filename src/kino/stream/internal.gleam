@@ -4,8 +4,12 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
 import gleam/result
-import gleam/string
 import logging
+
+// type Loop(state, element) {
+//   Continue(state: state, chunk: List(element))
+//   Done(chunk: List(element))
+// }
 
 type Emit(element) {
   Continue(chunk: List(element), fn() -> Emit(element))
@@ -33,16 +37,16 @@ pub fn unfold(
   initial: state,
   f: fn(state) -> Step(element, state),
 ) -> Stream(element) {
-  Stream(do_unfold(initial, f))
+  Stream(unfold_loop(initial, f))
 }
 
-fn do_unfold(
+fn unfold_loop(
   initial: state,
   f: fn(state) -> Step(element, state),
 ) -> fn() -> Emit(element) {
   fn() {
     case f(initial) {
-      Next(elements, state) -> Continue(elements, do_unfold(state, f))
+      Next(elements, state) -> Continue(elements, unfold_loop(state, f))
       Done -> Stop
     }
   }
@@ -52,25 +56,22 @@ pub fn fold_chunks(
   stream: Stream(element),
   initial: acc,
   f: fn(acc, List(element)) -> acc,
-) -> Result(Subject(acc), StartError) {
+) -> Result(acc, StartError) {
   use source <- result.try(new_source(stream))
-  new_sink(source, initial, f)
+  use receiver <- result.map(new_sink(source, initial, f))
+  process.receive_forever(receiver)
 }
 
 pub fn to_list(stream: Stream(element)) -> Result(List(element), StartError) {
   to_chunks(stream)
-  |> result.map(fn(sub) {
-    todo
-    // list.flatten
-  })
+  |> result.map(list.flatten)
 }
 
 pub fn to_chunks(
   stream: Stream(element),
-) -> Result(Subject(List(List(element))), StartError) {
-  todo
-  // let f = fn(acc, chunk) -> List(List(element)) { [chunk, ..acc] }
-  // fold_chunks(stream, [], f) |> result.map(list.reverse)
+) -> Result(List(List(element)), StartError) {
+  let f = fn(acc, chunk) -> List(List(element)) { [chunk, ..acc] }
+  fold_chunks(stream, [], f) |> result.map(list.reverse)
 }
 
 type Pull(element) {
@@ -102,7 +103,6 @@ fn new_source(
 fn pull(message: Pull(element), source: Source(element)) {
   case source.emit() {
     Continue(chunk, emit) -> {
-      logging.log(logging.Debug, "emit: " <> string.inspect(chunk))
       process.send(message.reply_to, Some(chunk))
       Source(..source, emit:) |> actor.continue
     }
@@ -125,7 +125,6 @@ fn new_sink(
       let selector =
         process.new_selector()
         |> process.selecting(self, function.identity)
-      process.send(source, Pull(self))
       Sink(self, source, initial, f, receiver)
       |> actor.Ready(selector)
     },
@@ -149,7 +148,6 @@ type Sink(acc, element) {
 fn consume(message: Option(List(element)), sink: Sink(acc, element)) {
   case message {
     Some(elements) -> {
-      logging.log(logging.Debug, "events: " <> string.inspect(elements))
       let accumulator = sink.fold(sink.accumulator, elements)
       let sink = Sink(..sink, accumulator:)
       process.send(sink.source, Pull(sink.self))
@@ -167,5 +165,4 @@ pub fn main() {
   logging.set_level(logging.Debug)
   let assert Ok([1]) = single(1) |> to_list
   let assert Ok([1, 2, 3]) = from_list([1, 2, 3]) |> to_list
-  process.sleep(100)
 }
