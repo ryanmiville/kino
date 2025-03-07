@@ -1,19 +1,30 @@
-import gleam/erlang/process.{type Subject}
+import gleam/bool
+import gleam/erlang/process.{type Subject, Normal}
 import gleam/function
+import gleam/int
+import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
-import gleam/result
+import gleam/result.{try}
 import gleam/string
 import logging
+
+const default_chunk_size = 5
 
 type Emit(element) {
   Continue(chunk: List(element), fn() -> Emit(element))
   Stop
 }
 
+type Emitter(element) =
+  fn() -> Emit(element)
+
+type Start(a) =
+  Result(a, StartError)
+
 pub opaque type Stream(element) {
-  Stream(emit: fn() -> Emit(element))
+  Stream(start: fn() -> Start(Subject(Pull(element))))
 }
 
 pub type Step(element, state) {
@@ -21,8 +32,23 @@ pub type Step(element, state) {
   Done
 }
 
+pub fn empty() -> Stream(element) {
+  from_emit(fn() { Stop })
+}
+
+fn from_emit(emit: fn() -> Emit(element)) -> Stream(element) {
+  Stream(fn() { start_source(emit) })
+}
+
 pub fn from_list(chunk: List(element)) -> Stream(element) {
-  Stream(fn() { Continue(chunk, fn() { Stop }) })
+  let chunks = list.sized_chunk(chunk, default_chunk_size)
+  let f = fn(state) {
+    case state {
+      [] -> Done
+      [next, ..rest] -> Next(next, rest)
+    }
+  }
+  unfold(chunks, f)
 }
 
 pub fn single(value: element) -> Stream(element) {
@@ -33,7 +59,7 @@ pub fn unfold(
   initial: state,
   f: fn(state) -> Step(element, state),
 ) -> Stream(element) {
-  Stream(do_unfold(initial, f))
+  from_emit(do_unfold(initial, f))
 }
 
 fn do_unfold(
@@ -48,31 +74,85 @@ fn do_unfold(
   }
 }
 
+pub fn take(stream: Stream(element), take: Int) -> Stream(element) {
+  use <- bool.lazy_guard(take <= 0, empty)
+  fn() {
+    let process = fn(count, elements) {
+      use <- bool.guard(count <= 0, Done)
+      let #(count, elements) = do_take(count, elements, [])
+      Next(list.reverse(elements), count)
+    }
+    use source <- try(stream.start())
+    use #(as_source, _) <- try(start_flow(source, take, process))
+    Ok(as_source)
+  }
+  |> Stream
+}
+
+fn do_take(count: Int, elements: List(a), acc: List(a)) -> #(Int, List(a)) {
+  case count, elements {
+    0, _ | _, [] -> #(count, acc)
+    _, [first, ..rest] -> do_take(count - 1, rest, [first, ..acc])
+  }
+}
+
+// pub fn rechunk(stream: Stream(element), chunk_size: Int) -> Stream(element) {
+//   todo
+// }
+
+pub fn map_chunks(stream: Stream(a), f: fn(List(a)) -> List(b)) -> Stream(b) {
+  fn() {
+    let process = fn(state, elements: List(a)) -> Step(b, state) {
+      Next(f(elements), state)
+    }
+    use source <- try(stream.start())
+    use #(as_source, _) <- try(start_flow(source, Nil, process))
+    Ok(as_source)
+  }
+  |> Stream
+}
+
+pub fn map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
+  map_chunks(stream, list.map(_, f))
+}
+
+// fn do_map(
+//   emit: fn() -> Emit(a),
+//   f: fn(a) -> b,
+// ) -> fn() -> Emit(b) {
+//   fn() {
+//     case emit() {
+//       Continue(elements, emit) -> Continue(elements.map(f), do_map(emit, f))
+//       Stop -> Stop
+//     }
+//   }
+// }
+
 pub fn fold_chunks(
   stream: Stream(element),
   initial: acc,
   f: fn(acc, List(element)) -> acc,
-) -> Result(Subject(acc), StartError) {
-  use source <- result.try(new_source(stream))
-  new_sink(source, initial, f)
+) -> Result(acc, StartError) {
+  use source <- try(stream.start())
+  use subject <- result.map(start_sink(source, initial, f))
+  process.receive_forever(subject)
 }
 
 pub fn to_list(stream: Stream(element)) -> Result(List(element), StartError) {
   to_chunks(stream)
-  |> result.map(fn(sub) {
-    todo
-    // list.flatten
-  })
+  |> result.map(list.flatten)
 }
 
 pub fn to_chunks(
   stream: Stream(element),
-) -> Result(Subject(List(List(element))), StartError) {
-  todo
-  // let f = fn(acc, chunk) -> List(List(element)) { [chunk, ..acc] }
-  // fold_chunks(stream, [], f) |> result.map(list.reverse)
+) -> Result(List(List(element)), StartError) {
+  let f = fn(acc, chunk) -> List(List(element)) { [chunk, ..acc] }
+  fold_chunks(stream, [], f) |> result.map(list.reverse)
 }
 
+// -------------------------------
+// Source
+// -------------------------------
 type Pull(element) {
   Pull(reply_to: Subject(Option(List(element))))
 }
@@ -81,43 +161,57 @@ type Source(element) {
   Source(self: Subject(Pull(element)), emit: fn() -> Emit(element))
 }
 
-fn new_source(
-  stream: Stream(element),
-) -> Result(Subject(Pull(element)), StartError) {
+fn start_source(emit: fn() -> Emit(element)) -> Start(Subject(Pull(element))) {
   actor.Spec(
     init: fn() {
       let self = process.new_subject()
       let selector =
         process.new_selector()
         |> process.selecting(self, function.identity)
-      Source(self, stream.emit)
+      Source(self:, emit:)
       |> actor.Ready(selector)
     },
     init_timeout: 1000,
-    loop: pull,
+    loop: on_pull,
   )
   |> actor.start_spec
 }
 
-fn pull(message: Pull(element), source: Source(element)) {
+fn on_pull(message: Pull(element), source: Source(element)) {
   case source.emit() {
     Continue(chunk, emit) -> {
-      logging.log(logging.Debug, "emit: " <> string.inspect(chunk))
+      logging.log(logging.Debug, "source: " <> string.inspect(chunk))
       process.send(message.reply_to, Some(chunk))
       Source(..source, emit:) |> actor.continue
     }
     Stop -> {
       process.send(message.reply_to, None)
-      actor.Stop(process.Normal)
+      actor.Stop(Normal)
     }
   }
 }
 
-fn new_sink(
+// -------------------------------
+// Sink
+// -------------------------------
+type Push(element) =
+  Option(List(element))
+
+type Sink(acc, element) {
+  Sink(
+    self: Subject(Push(element)),
+    source: Subject(Pull(element)),
+    accumulator: acc,
+    fold: fn(acc, List(element)) -> acc,
+    receiver: Subject(acc),
+  )
+}
+
+fn start_sink(
   source: Subject(Pull(element)),
   initial: acc,
   f: fn(acc, List(element)) -> acc,
-) {
+) -> Start(Subject(acc)) {
   let receiver = process.new_subject()
   actor.Spec(
     init: fn() {
@@ -130,26 +224,16 @@ fn new_sink(
       |> actor.Ready(selector)
     },
     init_timeout: 1000,
-    loop: consume,
+    loop: on_push,
   )
   |> actor.start_spec
   |> result.map(fn(_) { receiver })
 }
 
-type Sink(acc, element) {
-  Sink(
-    self: Subject(Option(List(element))),
-    source: Subject(Pull(element)),
-    accumulator: acc,
-    fold: fn(acc, List(element)) -> acc,
-    receiver: Subject(acc),
-  )
-}
-
-fn consume(message: Option(List(element)), sink: Sink(acc, element)) {
+fn on_push(message: Push(element), sink: Sink(acc, element)) {
   case message {
     Some(elements) -> {
-      logging.log(logging.Debug, "events: " <> string.inspect(elements))
+      logging.log(logging.Debug, "sink:   " <> string.inspect(elements))
       let accumulator = sink.fold(sink.accumulator, elements)
       let sink = Sink(..sink, accumulator:)
       process.send(sink.source, Pull(sink.self))
@@ -157,7 +241,97 @@ fn consume(message: Option(List(element)), sink: Sink(acc, element)) {
     }
     None -> {
       process.send(sink.receiver, sink.accumulator)
-      actor.Stop(process.Normal)
+      actor.Stop(Normal)
+    }
+  }
+}
+
+// -------------------------------
+// Flow
+// -------------------------------
+type Message(in, out) {
+  FlowPush(Push(in))
+  FlowPull(Pull(out))
+}
+
+type Flow(state, in, out) {
+  Flow(
+    self: Subject(Message(in, out)),
+    as_sink: Subject(Push(in)),
+    as_source: Subject(Pull(out)),
+    source: Subject(Pull(in)),
+    sink: Subject(Push(out)),
+    state: state,
+    process: fn(state, List(in)) -> Step(out, state),
+  )
+}
+
+fn start_flow(
+  source: Subject(Pull(in)),
+  state: state,
+  process: fn(state, List(in)) -> Step(out, state),
+) -> Start(#(Subject(Pull(out)), Subject(Push(in)))) {
+  let receiver = process.new_subject()
+  let dummy = process.new_subject()
+  actor.Spec(
+    init: fn() {
+      let self = process.new_subject()
+      let as_source = process.new_subject()
+      let as_sink = process.new_subject()
+
+      let selector =
+        process.new_selector()
+        |> process.selecting(self, function.identity)
+        |> process.selecting(as_source, FlowPull)
+        |> process.selecting(as_sink, FlowPush)
+      let flow =
+        Flow(
+          self:,
+          as_sink:,
+          as_source:,
+          source:,
+          sink: dummy,
+          state:,
+          process:,
+        )
+      process.send(receiver, #(as_source, as_sink))
+      actor.Ready(flow, selector)
+    },
+    init_timeout: 1000,
+    loop: on_message,
+  )
+  |> actor.start_spec
+  |> result.map(fn(_) { process.receive_forever(receiver) })
+}
+
+fn on_message(message: Message(in, out), flow: Flow(state, in, out)) {
+  process.sleep(250)
+  case message {
+    FlowPush(Some(elements)) -> {
+      let before = string.inspect(elements)
+      case flow.process(flow.state, elements) {
+        Next(elements, state) -> {
+          logging.log(
+            logging.Debug,
+            "flow:   " <> before <> " -> " <> string.inspect(elements),
+          )
+          process.send(flow.sink, Some(elements))
+          let flow = Flow(..flow, state:)
+          actor.continue(flow)
+        }
+        Done -> {
+          process.send(flow.sink, None)
+          actor.Stop(Normal)
+        }
+      }
+    }
+    FlowPush(None) -> {
+      process.send(flow.sink, None)
+      actor.Stop(Normal)
+    }
+    FlowPull(Pull(sink)) -> {
+      process.send(flow.source, Pull(flow.as_sink))
+      Flow(..flow, sink:) |> actor.continue
     }
   }
 }
@@ -165,7 +339,14 @@ fn consume(message: Option(List(element)), sink: Sink(acc, element)) {
 pub fn main() {
   logging.configure()
   logging.set_level(logging.Debug)
-  let assert Ok([1]) = single(1) |> to_list
-  let assert Ok([1, 2, 3]) = from_list([1, 2, 3]) |> to_list
+  io.println("====Doubler====")
+  let assert Ok([2, 4, 6]) =
+    from_list([1, 2, 3]) |> map(int.multiply(_, 2)) |> to_list
+
+  process.sleep(100)
+
+  io.println("====Counter====")
+  let counter = unfold(0, fn(acc) { Next([acc], acc + 1) })
+  let assert Ok([0, 1, 2]) = counter |> take(3) |> to_list
   process.sleep(100)
 }
