@@ -17,9 +17,6 @@ type Emit(element) {
   Stop
 }
 
-type Emitter(element) =
-  fn() -> Emit(element)
-
 type Start(a) =
   Result(a, StartError)
 
@@ -53,6 +50,14 @@ pub fn from_list(chunk: List(element)) -> Stream(element) {
 
 pub fn single(value: element) -> Stream(element) {
   from_list([value])
+}
+
+pub fn repeatedly(f: fn() -> element) -> Stream(element) {
+  unfold(Nil, fn(_) { Next([f()], Nil) })
+}
+
+pub fn repeat(x: element) -> Stream(element) {
+  repeatedly(fn() { x })
 }
 
 pub fn unfold(
@@ -116,16 +121,13 @@ pub fn map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
   map_chunks(stream, list.map(_, f))
 }
 
-// fn do_map(
-//   emit: fn() -> Emit(a),
-//   f: fn(a) -> b,
-// ) -> fn() -> Emit(b) {
-//   fn() {
-//     case emit() {
-//       Continue(elements, emit) -> Continue(elements.map(f), do_map(emit, f))
-//       Stop -> Stop
-//     }
-//   }
+pub fn filter(stream: Stream(a), f: fn(a) -> Bool) -> Stream(a) {
+  map_chunks(stream, list.filter(_, f))
+}
+
+// pub fn flatten(stream: Stream(Stream(element))) -> Stream(element) {
+//   todo
+//   // map_chunks(stream, list.flatten)
 // }
 
 pub fn fold_chunks(
