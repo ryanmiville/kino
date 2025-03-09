@@ -12,7 +12,7 @@ pub type Nothing
 
 type Action(in, out) {
   Stop
-  Continue(out, fn(in) -> Action(in, out))
+  Continue(Option(out), fn(in) -> Action(in, out))
 }
 
 type Stage(element) =
@@ -46,6 +46,14 @@ pub fn single(element: element) -> Stream(element) {
   from_list([element])
 }
 
+pub fn repeatedly(f: fn() -> element) -> Stream(element) {
+  unfold(Nil, fn(_) { Next(f(), Nil) })
+}
+
+pub fn repeat(x: element) -> Stream(element) {
+  repeatedly(fn() { x })
+}
+
 pub fn map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
   Stream(..stream, continuation: do_map(stream.continuation, f))
 }
@@ -57,7 +65,8 @@ fn do_map(
   fn(in) {
     case continuation(in) {
       Stop -> Stop
-      Continue(e, continuation) -> Continue(f(e), do_map(continuation, f))
+      Continue(e, continuation) ->
+        Continue(option.map(e, f), do_map(continuation, f))
     }
   }
 }
@@ -133,11 +142,34 @@ fn do_unfold(
 ) -> fn(in) -> Action(in, out) {
   fn(in) {
     case f(initial, in) {
-      Next(x, acc) -> Continue(x, do_unfold(acc, f))
+      Next(x, acc) -> Continue(Some(x), do_unfold(acc, f))
       Done -> Stop
     }
   }
 }
+
+// pub fn filter(stream: Stream(a), keeping predicate: fn(a) -> Bool) -> Stream(a) {
+//   let continuation = fn(in) { filter_loop(in, stream.continuation, predicate) }
+//   Stream(..stream, continuation:)
+// }
+
+// fn filter_loop(
+//   initial: in,
+//   continuation: fn(in) -> Action(in, out),
+//   predicate: fn(out) -> Bool,
+// ) -> Action(in, out) {
+//   logging.log(logging.Error, "filter_loop: " <> string.inspect(initial))
+//   case continuation(initial) {
+//     Stop -> Stop
+//     Continue(None, stream) ->
+//       Continue(None, fn(in) { filter_loop(in, stream, predicate) })
+//     Continue(Some(e), stream) ->
+//       case predicate(e) {
+//         True -> Continue(Some(e), fn(in) { filter_loop(in, stream, predicate) })
+//         False -> Continue(None, fn(in) { filter_loop(in, stream, predicate) })
+//       }
+//   }
+// }
 
 pub fn fold(
   stream: Stream(element),
@@ -198,9 +230,12 @@ fn start_source(
 
 fn on_pull(message: Pull(element), source: SourceState(element)) {
   case source.emit(Nil) {
-    Continue(chunk, emit) -> {
+    Continue(Some(chunk), emit) -> {
       logging.log(logging.Debug, "source: " <> string.inspect(chunk))
       process.send(message.reply_to, Some(chunk))
+      SourceState(..source, emit:) |> actor.continue
+    }
+    Continue(None, emit) -> {
       SourceState(..source, emit:) |> actor.continue
     }
     Stop -> {
@@ -323,7 +358,7 @@ fn on_message(message: Message(in, out), flow: Flow(in, out)) {
             logging.Debug,
             "flow:   " <> before <> " -> " <> string.inspect(element),
           )
-          process.send(flow.sink, Some(element))
+          process.send(flow.sink, element)
           let flow = Flow(..flow, process:)
           actor.continue(flow)
         }

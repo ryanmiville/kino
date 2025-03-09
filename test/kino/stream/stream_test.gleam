@@ -35,6 +35,7 @@ pub fn async_map_test() {
   |> stream.to_list
   |> should.equal(Ok([2, 4, 6]))
 }
+
 // pub fn filter_test() {
 //   stream.from_list([1, 2, 3])
 //   |> stream.filter(int.is_even)
@@ -42,9 +43,9 @@ pub fn async_map_test() {
 //   |> should.equal(Ok([2]))
 // }
 
-// pub fn repeat_test() {
-//   stream.repeat(1)
-//   |> stream.take(4)
-//   |> stream.to_list
-//   |> should.equal(Ok([1, 1, 1, 1]))
-// }
+pub fn repeat_test() {
+  stream.repeat(1)
+  |> stream.take(4)
+  |> stream.to_list
+  |> should.equal(Ok([1, 1, 1, 1]))
+}
