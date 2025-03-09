@@ -1,7 +1,6 @@
 import gleam/bool
 import gleam/erlang/process.{type Subject, Normal}
 import gleam/function
-import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
@@ -72,22 +71,19 @@ fn do_map(
   }
 }
 
-pub fn async_map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
+pub fn async(stream: Stream(a)) -> Stream(a) {
   case stream {
-    Stream(None, continuation) -> do_async_map(unsafe_coerce(continuation), f)
+    Stream(None, continuation) -> do_async(unsafe_coerce(continuation))
     Stream(Some(source), flow) -> {
       let new_source = fn() { merge_stages(source(), flow) }
-      let new_flow = do_unfold(Nil, fn(acc, a) { Next(f(a), acc) })
+      let new_flow = do_unfold(Nil, fn(acc, a) { Next(a, acc) })
       Stream(unsafe_coerce(new_source), unsafe_coerce(new_flow))
     }
   }
 }
 
-fn do_async_map(
-  continuation: fn(Nil) -> Action(Nil, a),
-  f: fn(a) -> b,
-) -> Stream(b) {
-  let action = do_unfold(Nil, fn(acc, a) { Next(f(a), acc) })
+fn do_async(continuation: fn(Nil) -> Action(Nil, a)) -> Stream(b) {
+  let action = do_unfold(Nil, fn(acc, a) { Next(a, acc) })
   Stream(
     Some(fn() { start_source(continuation) |> unsafe_coerce }),
     unsafe_coerce(action),
