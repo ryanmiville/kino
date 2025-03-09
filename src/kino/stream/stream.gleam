@@ -10,14 +10,9 @@ import logging
 
 pub type Nothing
 
-type Action(element) {
+type Action(in, out) {
   Stop
-  Continue(element, fn() -> Action(element))
-}
-
-type FlowAction(in, out) {
-  FlowStop
-  FlowContinue(out, fn(in) -> FlowAction(in, out))
+  Continue(out, fn(in) -> Action(in, out))
 }
 
 type Stage(element) =
@@ -31,8 +26,8 @@ pub type Step(element, state) {
 type X
 
 pub opaque type Stream(element) {
-  Source(continuation: fn() -> Action(element))
-  Stream(source: fn() -> Stage(X), flow: fn(X) -> FlowAction(X, element))
+  Source(continuation: fn(Nil) -> Action(Nil, element))
+  Stream(source: fn() -> Stage(X), continuation: fn(X) -> Action(X, element))
 }
 
 pub fn from_list(elements: List(element)) -> Stream(element) {
@@ -51,29 +46,31 @@ pub fn single(element: element) -> Stream(element) {
 
 pub fn map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
   case stream {
-    Source(continuation) -> Source(map_loop(continuation, f))
-    Stream(source, flow) -> Stream(source, flow_map_loop(flow, f))
+    Source(continuation) -> Source(do_map(continuation, f))
+    Stream(source, flow) -> Stream(source, do_map(flow, f))
   }
 }
 
-fn map_loop(continuation: fn() -> Action(a), f: fn(a) -> b) -> fn() -> Action(b) {
-  fn() {
-    case continuation() {
-      Stop -> Stop
-      Continue(e, continuation) -> Continue(f(e), map_loop(continuation, f))
-    }
-  }
-}
+// fn map_loop(
+//   continuation: fn(in) -> Action(in, a),
+//   f: fn(a) -> b,
+// ) -> fn(in) -> Action(in, b) {
+//   fn() {
+//     case continuation() {
+//       Stop -> Stop
+//       Continue(e, continuation) -> Continue(f(e), map_loop(continuation, f))
+//     }
+//   }
+// }
 
-fn flow_map_loop(
-  continuation: fn(in) -> FlowAction(in, a),
+fn do_map(
+  continuation: fn(in) -> Action(in, a),
   f: fn(a) -> b,
-) -> fn(in) -> FlowAction(in, b) {
+) -> fn(in) -> Action(in, b) {
   fn(in) {
     case continuation(in) {
-      FlowStop -> FlowStop
-      FlowContinue(e, continuation) ->
-        FlowContinue(f(e), flow_map_loop(continuation, f))
+      Stop -> Stop
+      Continue(e, continuation) -> Continue(f(e), do_map(continuation, f))
     }
   }
 }
@@ -83,14 +80,17 @@ pub fn async_map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
     Source(continuation) -> do_async_map(continuation, f)
     Stream(source, flow) -> {
       let new_source = fn() { merge_stages(source(), flow) }
-      let new_flow = unfold_flow_loop(Nil, fn(acc, a) { Next(f(a), acc) })
+      let new_flow = do_unfold(Nil, fn(acc, a) { Next(f(a), acc) })
       Stream(unsafe_coerce(new_source), unsafe_coerce(new_flow))
     }
   }
 }
 
-fn do_async_map(continuation: fn() -> Action(a), f: fn(a) -> b) -> Stream(b) {
-  let action = unfold_flow_loop(Nil, fn(acc, a) { Next(f(a), acc) })
+fn do_async_map(
+  continuation: fn(Nil) -> Action(Nil, a),
+  f: fn(a) -> b,
+) -> Stream(b) {
+  let action = do_unfold(Nil, fn(acc, a) { Next(f(a), acc) })
   Stream(
     fn() { start_source(continuation) |> unsafe_coerce },
     unsafe_coerce(action),
@@ -99,67 +99,35 @@ fn do_async_map(continuation: fn() -> Action(a), f: fn(a) -> b) -> Stream(b) {
 
 fn merge_stages(
   source: Stage(X),
-  flow: fn(X) -> FlowAction(X, element),
+  flow: fn(X) -> Action(X, element),
 ) -> Stage(element) {
   use source <- result.try(source)
   start_flow(source, flow)
 }
 
-fn flow_action(f: fn(a) -> b) -> fn() -> Action(fn(a) -> b) {
-  fn() { Continue(f, flow_action(f)) }
-}
-
-fn unfold_flow_loop(
-  initial: acc,
-  f: fn(acc, in) -> Step(out, acc),
-) -> fn(in) -> FlowAction(in, out) {
-  fn(in) {
-    case f(initial, in) {
-      Next(x, acc) -> FlowContinue(x, unfold_flow_loop(acc, f))
-      Done -> FlowStop
-    }
-  }
-}
-
 pub fn empty() -> Stream(element) {
-  Source(fn() { Stop })
+  Source(fn(_) { Stop })
 }
 
 pub fn take(stream: Stream(element), desired: Int) -> Stream(element) {
   use <- bool.lazy_guard(desired <= 0, empty)
   case stream {
-    Source(continuation) -> source_take(continuation, desired) |> Source
-    Stream(source, flow) -> flow_take(flow, desired) |> Stream(source, _)
+    Source(continuation) -> do_take(continuation, desired) |> Source
+    Stream(source, flow) -> do_take(flow, desired) |> Stream(source, _)
   }
 }
 
-fn source_take(
-  continuation: fn() -> Action(e),
+fn do_take(
+  continuation: fn(in) -> Action(in, out),
   desired: Int,
-) -> fn() -> Action(e) {
-  fn() {
+) -> fn(in) -> Action(in, out) {
+  fn(in) {
     case desired > 0 {
       False -> Stop
       True ->
-        case continuation() {
-          Stop -> Stop
-          Continue(e, next) -> Continue(e, source_take(next, desired - 1))
-        }
-    }
-  }
-}
-
-fn flow_take(
-  continuation: fn(in) -> FlowAction(in, out),
-  desired: Int,
-) -> fn(in) -> FlowAction(in, out) {
-  fn(in) {
-    case desired > 0 {
-      False -> FlowStop
-      True ->
         case continuation(in) {
-          FlowStop -> FlowStop
-          FlowContinue(e, next) -> FlowContinue(e, flow_take(next, desired - 1))
+          Stop -> Stop
+          Continue(e, next) -> Continue(e, do_take(next, desired - 1))
         }
     }
   }
@@ -169,19 +137,19 @@ pub fn unfold(
   from initial: acc,
   with f: fn(acc) -> Step(element, acc),
 ) -> Stream(element) {
+  let step = fn(acc, _in) { f(acc) }
   initial
-  |> unfold_loop(f)
+  |> do_unfold(step)
   |> Source
 }
 
-// Creating Sources
-fn unfold_loop(
+fn do_unfold(
   initial: acc,
-  f: fn(acc) -> Step(element, acc),
-) -> fn() -> Action(element) {
-  fn() {
-    case f(initial) {
-      Next(x, acc) -> Continue(x, unfold_loop(acc, f))
+  f: fn(acc, in) -> Step(out, acc),
+) -> fn(in) -> Action(in, out) {
+  fn(in) {
+    case f(initial, in) {
+      Next(x, acc) -> Continue(x, do_unfold(acc, f))
       Done -> Stop
     }
   }
@@ -220,11 +188,14 @@ type Pull(element) {
 }
 
 type SourceState(element) {
-  SourceState(self: Subject(Pull(element)), emit: fn() -> Action(element))
+  SourceState(
+    self: Subject(Pull(element)),
+    emit: fn(Nil) -> Action(Nil, element),
+  )
 }
 
 fn start_source(
-  emit: fn() -> Action(element),
+  emit: fn(Nil) -> Action(Nil, element),
 ) -> Result(Subject(Pull(element)), StartError) {
   actor.Spec(
     init: fn() {
@@ -242,7 +213,7 @@ fn start_source(
 }
 
 fn on_pull(message: Pull(element), source: SourceState(element)) {
-  case source.emit() {
+  case source.emit(Nil) {
     Continue(chunk, emit) -> {
       logging.log(logging.Debug, "source: " <> string.inspect(chunk))
       process.send(message.reply_to, Some(chunk))
@@ -325,13 +296,13 @@ type Flow(in, out) {
     as_source: Subject(Pull(out)),
     source: Subject(Pull(in)),
     sink: Subject(Push(out)),
-    process: fn(in) -> FlowAction(in, out),
+    process: fn(in) -> Action(in, out),
   )
 }
 
 fn start_flow(
   source: Subject(Pull(in)),
-  process: fn(in) -> FlowAction(in, out),
+  process: fn(in) -> Action(in, out),
 ) -> Result(Subject(Pull(out)), StartError) {
   let receiver = process.new_subject()
   let dummy = process.new_subject()
@@ -363,7 +334,7 @@ fn on_message(message: Message(in, out), flow: Flow(in, out)) {
     FlowPush(Some(element)) -> {
       let before = string.inspect(element)
       case flow.process(element) {
-        FlowContinue(element, process) -> {
+        Continue(element, process) -> {
           logging.log(
             logging.Debug,
             "flow:   " <> before <> " -> " <> string.inspect(element),
@@ -372,7 +343,7 @@ fn on_message(message: Message(in, out), flow: Flow(in, out)) {
           let flow = Flow(..flow, process:)
           actor.continue(flow)
         }
-        FlowStop -> {
+        Stop -> {
           process.send(flow.sink, None)
           actor.Stop(Normal)
         }
