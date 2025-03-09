@@ -26,8 +26,10 @@ pub type Step(element, state) {
 type X
 
 pub opaque type Stream(element) {
-  Source(continuation: fn(Nil) -> Action(Nil, element))
-  Stream(source: fn() -> Stage(X), continuation: fn(X) -> Action(X, element))
+  Stream(
+    source: Option(fn() -> Stage(X)),
+    continuation: fn(X) -> Action(X, element),
+  )
 }
 
 pub fn from_list(elements: List(element)) -> Stream(element) {
@@ -45,23 +47,8 @@ pub fn single(element: element) -> Stream(element) {
 }
 
 pub fn map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
-  case stream {
-    Source(continuation) -> Source(do_map(continuation, f))
-    Stream(source, flow) -> Stream(source, do_map(flow, f))
-  }
+  Stream(..stream, continuation: do_map(stream.continuation, f))
 }
-
-// fn map_loop(
-//   continuation: fn(in) -> Action(in, a),
-//   f: fn(a) -> b,
-// ) -> fn(in) -> Action(in, b) {
-//   fn() {
-//     case continuation() {
-//       Stop -> Stop
-//       Continue(e, continuation) -> Continue(f(e), map_loop(continuation, f))
-//     }
-//   }
-// }
 
 fn do_map(
   continuation: fn(in) -> Action(in, a),
@@ -77,8 +64,8 @@ fn do_map(
 
 pub fn async_map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
   case stream {
-    Source(continuation) -> do_async_map(continuation, f)
-    Stream(source, flow) -> {
+    Stream(None, continuation) -> do_async_map(unsafe_coerce(continuation), f)
+    Stream(Some(source), flow) -> {
       let new_source = fn() { merge_stages(source(), flow) }
       let new_flow = do_unfold(Nil, fn(acc, a) { Next(f(a), acc) })
       Stream(unsafe_coerce(new_source), unsafe_coerce(new_flow))
@@ -92,7 +79,7 @@ fn do_async_map(
 ) -> Stream(b) {
   let action = do_unfold(Nil, fn(acc, a) { Next(f(a), acc) })
   Stream(
-    fn() { start_source(continuation) |> unsafe_coerce },
+    Some(fn() { start_source(continuation) |> unsafe_coerce }),
     unsafe_coerce(action),
   )
 }
@@ -106,15 +93,12 @@ fn merge_stages(
 }
 
 pub fn empty() -> Stream(element) {
-  Source(fn(_) { Stop })
+  Stream(None, fn(_) { Stop })
 }
 
 pub fn take(stream: Stream(element), desired: Int) -> Stream(element) {
   use <- bool.lazy_guard(desired <= 0, empty)
-  case stream {
-    Source(continuation) -> do_take(continuation, desired) |> Source
-    Stream(source, flow) -> do_take(flow, desired) |> Stream(source, _)
-  }
+  Stream(..stream, continuation: do_take(stream.continuation, desired))
 }
 
 fn do_take(
@@ -140,7 +124,7 @@ pub fn unfold(
   let step = fn(acc, _in) { f(acc) }
   initial
   |> do_unfold(step)
-  |> Source
+  |> Stream(None, _)
 }
 
 fn do_unfold(
@@ -172,8 +156,8 @@ pub fn to_list(stream: Stream(element)) -> Result(List(element), StartError) {
 
 fn start(stream: Stream(element)) -> Stage(element) {
   case stream {
-    Source(continuation) -> start_source(continuation)
-    Stream(source, flow) -> merge_stages(source(), flow)
+    Stream(None, continuation) -> start_source(unsafe_coerce(continuation))
+    Stream(Some(source), flow) -> merge_stages(source(), flow)
   }
 }
 
