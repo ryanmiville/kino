@@ -1,6 +1,7 @@
 import gleam/bool
 import gleam/erlang/process.{type Subject, Normal}
 import gleam/function
+import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
@@ -148,28 +149,35 @@ fn do_unfold(
   }
 }
 
-// pub fn filter(stream: Stream(a), keeping predicate: fn(a) -> Bool) -> Stream(a) {
-//   let continuation = fn(in) { filter_loop(in, stream.continuation, predicate) }
-//   Stream(..stream, continuation:)
-// }
+pub fn filter(stream: Stream(a), keeping predicate: fn(a) -> Bool) -> Stream(a) {
+  let continuation = do_filter(stream.continuation, predicate)
+  Stream(..stream, continuation:)
+}
 
-// fn filter_loop(
-//   initial: in,
-//   continuation: fn(in) -> Action(in, out),
-//   predicate: fn(out) -> Bool,
-// ) -> Action(in, out) {
-//   logging.log(logging.Error, "filter_loop: " <> string.inspect(initial))
-//   case continuation(initial) {
-//     Stop -> Stop
-//     Continue(None, stream) ->
-//       Continue(None, fn(in) { filter_loop(in, stream, predicate) })
-//     Continue(Some(e), stream) ->
-//       case predicate(e) {
-//         True -> Continue(Some(e), fn(in) { filter_loop(in, stream, predicate) })
-//         False -> Continue(None, fn(in) { filter_loop(in, stream, predicate) })
-//       }
-//   }
-// }
+fn do_filter(
+  continuation: fn(in) -> Action(in, out),
+  predicate: fn(out) -> Bool,
+) {
+  fn(in) {
+    case continuation(in) {
+      Stop -> Stop
+      Continue(e, stream) ->
+        Continue(filter_option(e, predicate), do_filter(stream, predicate))
+    }
+  }
+}
+
+fn filter_option(option: Option(a), predicate: fn(a) -> Bool) -> Option(a) {
+  case option {
+    Some(value) -> {
+      case predicate(value) {
+        True -> Some(value)
+        False -> None
+      }
+    }
+    None -> None
+  }
+}
 
 pub fn fold(
   stream: Stream(element),
@@ -236,6 +244,7 @@ fn on_pull(message: Pull(element), source: SourceState(element)) {
       SourceState(..source, emit:) |> actor.continue
     }
     Continue(None, emit) -> {
+      process.send(source.self, message)
       SourceState(..source, emit:) |> actor.continue
     }
     Stop -> {
@@ -294,6 +303,7 @@ fn on_push(message: Push(element), sink: Sink(acc, element)) {
       actor.continue(sink)
     }
     None -> {
+      logging.log(logging.Debug, "sink:   None")
       process.send(sink.receiver, sink.accumulator)
       actor.Stop(Normal)
     }
@@ -353,12 +363,16 @@ fn on_message(message: Message(in, out), flow: Flow(in, out)) {
     FlowPush(Some(element)) -> {
       let before = string.inspect(element)
       case flow.process(element) {
-        Continue(element, process) -> {
+        Continue(None, process) -> {
+          process.send(flow.source, Pull(flow.as_sink))
+          actor.continue(Flow(..flow, process:))
+        }
+        Continue(Some(element), process) -> {
           logging.log(
             logging.Debug,
             "flow:   " <> before <> " -> " <> string.inspect(element),
           )
-          process.send(flow.sink, element)
+          process.send(flow.sink, Some(element))
           let flow = Flow(..flow, process:)
           actor.continue(flow)
         }
