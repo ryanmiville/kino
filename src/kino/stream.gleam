@@ -218,23 +218,18 @@ pub fn append(to first: Stream(a), suffix second: Stream(a)) -> Stream(a) {
           let s1 = start_source(unsafe_coerce(c1))
           use s2 <- result.try(s2())
           let s2 = start_flow([s2], c2)
-          merge_sources(s1, s2)
+          merge_stages(s1, s2)
         }
         |> unsafe_coerce
       Stream(Some(source), unsafe_coerce(identity()))
     }
 
-    // Stream(None, c1), Stream(Some(s2), c2) -> {
-    //   let s1 = fn() { start_source(unsafe_coerce(c1)) }
-    //   let merged = fn() { merge_sources(s1(), s2()) }
-    //   Stream(Some(merged), c2)
-    // }
     Stream(Some(s1), c1), Stream(None, c2) -> {
       let source = fn() {
         use s1 <- result.try(s1())
         let s1 = start_flow([s1], c1) |> unsafe_coerce
         let s2 = start_source(unsafe_coerce(c2))
-        merge_sources(s1, s2)
+        merge_stages(s1, s2)
       }
       Stream(Some(source), unsafe_coerce(identity()))
     }
@@ -246,7 +241,7 @@ pub fn append(to first: Stream(a), suffix second: Stream(a)) -> Stream(a) {
           let s1 = start_flow([s1], c1)
           use s2 <- result.try(s2())
           let s2 = start_flow([s2], c2)
-          merge_sources(s1, s2)
+          merge_stages(s1, s2)
         }
         |> unsafe_coerce
       Stream(Some(source), unsafe_coerce(identity()))
@@ -266,24 +261,31 @@ fn append_continuation(
   }
 }
 
-fn merge_sources(first: Stage(a), second: Stage(a)) -> Stage(a) {
+fn merge_stages(first: Stage(a), second: Stage(a)) -> Stage(a) {
   use first <- result.try(first)
   use second <- result.try(second)
   start_flow([first, second], identity())
 }
 
 pub fn flatten(stream: Stream(Stream(a))) -> Stream(a) {
+  map(stream, start)
   todo
 }
 
-fn do_flatten(
-  flattened: fn(in) -> Action(in, Stream(a)),
-) -> fn(in) -> Action(in, a) {
-  todo
+fn do_flatten(flow: fn(in) -> Action(in, Stream(a))) -> fn(in) -> Action(in, a) {
+  fn(in) {
+    case flow(in) {
+      Continue(Some(stream), next) -> {
+        todo
+      }
+      _ -> todo
+      Stop -> Stop
+    }
+  }
 }
 
 pub fn flat_map(over stream: Stream(a), with f: fn(a) -> Stream(b)) -> Stream(b) {
-  stream |> map(f) |> flatten
+  todo
 }
 
 pub fn filter_map(
@@ -291,6 +293,36 @@ pub fn filter_map(
   keeping_with f: fn(a) -> Result(b, c),
 ) -> Stream(b) {
   todo
+}
+
+pub fn transform(
+  over stream: Stream(a),
+  from initial: acc,
+  with f: fn(acc, a) -> Step(b, acc),
+) -> Stream(b) {
+  Stream(
+    ..stream,
+    continuation: transform_loop(stream.continuation, initial, f),
+  )
+}
+
+fn transform_loop(
+  continuation: fn(in) -> Action(in, a),
+  state: acc,
+  f: fn(acc, a) -> Step(b, acc),
+) -> fn(in) -> Action(in, b) {
+  fn(in) {
+    case continuation(in) {
+      Stop -> Stop
+      Continue(None, next) -> Continue(None, transform_loop(next, state, f))
+      Continue(Some(el), next) ->
+        case f(state, el) {
+          Done -> Stop
+          Next(yield, next_state) ->
+            Continue(Some(yield), transform_loop(next, next_state, f))
+        }
+    }
+  }
 }
 
 pub fn range(from start: Int, to stop: Int) -> Stream(Int) {
