@@ -1,14 +1,14 @@
 import gleam/bool
 import gleam/erlang/process.{type Subject, Normal}
 import gleam/function
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/otp/actor.{type StartError}
 import gleam/result
 import gleam/string
 import logging
-
-pub type Nothing
 
 type Action(in, out) {
   Stop
@@ -18,11 +18,7 @@ type Action(in, out) {
 type Stage(element) =
   Result(Subject(Pull(element)), StartError)
 
-pub type Step(element, state) {
-  Next(element: element, state: state)
-  Done
-}
-
+// A shameful hack
 type X
 
 pub opaque type Stream(element) {
@@ -30,6 +26,46 @@ pub opaque type Stream(element) {
     source: Option(fn() -> Stage(X)),
     continuation: fn(X) -> Action(X, element),
   )
+}
+
+pub type Step(element, state) {
+  Next(element: element, state: state)
+  Done
+}
+
+// Shortcut for an empty stream.
+fn stop(_in: in) -> Action(in, out) {
+  Stop
+}
+
+pub fn unfold(
+  from initial: acc,
+  with f: fn(acc) -> Step(element, acc),
+) -> Stream(element) {
+  let step = fn(acc, _in) { f(acc) }
+  initial
+  |> do_unfold(step)
+  |> Stream(None, _)
+}
+
+fn do_unfold(
+  initial: acc,
+  f: fn(acc, in) -> Step(out, acc),
+) -> fn(in) -> Action(in, out) {
+  fn(in) {
+    case f(initial, in) {
+      Next(x, acc) -> Continue(Some(x), do_unfold(acc, f))
+      Done -> Stop
+    }
+  }
+}
+
+pub fn repeatedly(f: fn() -> element) -> Stream(element) {
+  unfold(Nil, fn(_) { Next(f(), Nil) })
+}
+
+pub fn repeat(x: element) -> Stream(element) {
+  repeatedly(fn() { x })
 }
 
 pub fn from_list(elements: List(element)) -> Stream(element) {
@@ -44,14 +80,6 @@ pub fn from_list(elements: List(element)) -> Stream(element) {
 
 pub fn single(element: element) -> Stream(element) {
   from_list([element])
-}
-
-pub fn repeatedly(f: fn() -> element) -> Stream(element) {
-  unfold(Nil, fn(_) { Next(f(), Nil) })
-}
-
-pub fn repeat(x: element) -> Stream(element) {
-  repeatedly(fn() { x })
 }
 
 pub fn map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
@@ -95,11 +123,11 @@ fn merge_stages(
   flow: fn(X) -> Action(X, element),
 ) -> Stage(element) {
   use source <- result.try(source)
-  start_flow(source, flow)
+  start_flow([source], flow)
 }
 
 pub fn empty() -> Stream(element) {
-  Stream(None, fn(_) { Stop })
+  Stream(None, stop)
 }
 
 pub fn take(stream: Stream(element), desired: Int) -> Stream(element) {
@@ -123,28 +151,6 @@ fn do_take(
   }
 }
 
-pub fn unfold(
-  from initial: acc,
-  with f: fn(acc) -> Step(element, acc),
-) -> Stream(element) {
-  let step = fn(acc, _in) { f(acc) }
-  initial
-  |> do_unfold(step)
-  |> Stream(None, _)
-}
-
-fn do_unfold(
-  initial: acc,
-  f: fn(acc, in) -> Step(out, acc),
-) -> fn(in) -> Action(in, out) {
-  fn(in) {
-    case f(initial, in) {
-      Next(x, acc) -> Continue(Some(x), do_unfold(acc, f))
-      Done -> Stop
-    }
-  }
-}
-
 pub fn filter(stream: Stream(a), keeping predicate: fn(a) -> Bool) -> Stream(a) {
   let continuation = do_filter(stream.continuation, predicate)
   Stream(..stream, continuation:)
@@ -153,7 +159,7 @@ pub fn filter(stream: Stream(a), keeping predicate: fn(a) -> Bool) -> Stream(a) 
 fn do_filter(
   continuation: fn(in) -> Action(in, out),
   predicate: fn(out) -> Bool,
-) {
+) -> fn(in) -> Action(in, out) {
   fn(in) {
     case continuation(in) {
       Stop -> Stop
@@ -195,6 +201,156 @@ fn start(stream: Stream(element)) -> Stage(element) {
     Stream(None, continuation) -> start_source(unsafe_coerce(continuation))
     Stream(Some(source), flow) -> merge_stages(source(), flow)
   }
+}
+
+pub fn append(to first: Stream(a), suffix second: Stream(a)) -> Stream(a) {
+  case first, second {
+    Stream(None, c1), Stream(None, c2) ->
+      Stream(None, append_continuation(c1, c2))
+    Stream(None, c1), Stream(Some(s2), c2) -> {
+      let s1 = fn() { start_source(unsafe_coerce(c1)) }
+      let s2 = fn() { merge_stages(s2(), c2) }
+
+      todo
+    }
+    Stream(Some(s1), c1), Stream(None, c2) ->
+      Stream(Some(s1), append_continuation(c1, c2))
+    Stream(Some(s1), c1), Stream(Some(s2), c2) -> todo
+  }
+}
+
+fn append_continuation(
+  first: fn(in) -> Action(in, a),
+  second: fn(in) -> Action(in, a),
+) -> fn(in) -> Action(in, a) {
+  fn(in) {
+    case first(in) {
+      Continue(a, next) -> Continue(a, append_continuation(next, second))
+      Stop -> second(in)
+    }
+  }
+}
+
+fn merge_sources(first: Stage(a), second: Stage(a)) -> Stage(a) {
+  use first <- result.try(first)
+  use second <- result.try(second)
+  todo
+}
+
+pub fn flatten(stream: Stream(Stream(a))) -> Stream(a) {
+  todo
+}
+
+fn do_flatten(
+  flattened: fn(in) -> Action(in, Stream(a)),
+) -> fn(in) -> Action(in, a) {
+  todo
+}
+
+pub fn flat_map(over stream: Stream(a), with f: fn(a) -> Stream(b)) -> Stream(b) {
+  stream |> map(f) |> flatten
+}
+
+pub fn filter_map(
+  stream: Stream(a),
+  keeping_with f: fn(a) -> Result(b, c),
+) -> Stream(b) {
+  todo
+}
+
+pub fn range(from start: Int, to stop: Int) -> Stream(Int) {
+  case int.compare(start, stop) {
+    order.Eq -> once(fn() { start })
+    order.Gt ->
+      unfold(from: start, with: fn(current) {
+        case current < stop {
+          False -> Next(current, current - 1)
+          True -> Done
+        }
+      })
+
+    order.Lt ->
+      unfold(from: start, with: fn(current) {
+        case current > stop {
+          False -> Next(current, current + 1)
+          True -> Done
+        }
+      })
+  }
+}
+
+pub fn index(over stream: Stream(element)) -> Stream(#(element, Int)) {
+  todo
+}
+
+pub fn drop(from stream: Stream(element), up_to desired: Int) -> Stream(element) {
+  todo
+}
+
+pub fn concat(from streams: List(Stream(element))) -> Stream(element) {
+  todo
+}
+
+pub fn iterate(
+  from initial: element,
+  with f: fn(element) -> element,
+) -> Stream(element) {
+  unfold(initial, fn(element) { Next(element, f(element)) })
+}
+
+pub fn take_while(
+  in stream: Stream(element),
+  satisfying predicate: fn(element) -> Bool,
+) -> Stream(element) {
+  todo
+}
+
+pub fn drop_while(
+  in stream: Stream(element),
+  satisfying predicate: fn(element) -> Bool,
+) -> Stream(element) {
+  todo
+}
+
+pub fn zip(left: Stream(a), right: Stream(b)) -> Stream(#(a, b)) {
+  todo
+}
+
+pub fn intersperse(
+  over stream: Stream(element),
+  with elem: element,
+) -> Stream(element) {
+  todo
+}
+
+pub fn once(f: fn() -> element) -> Stream(element) {
+  Stream(None, fn(_) { Continue(Some(f()), stop) })
+}
+
+pub fn interleave(
+  left: Stream(element),
+  with right: Stream(element),
+) -> Stream(element) {
+  todo
+}
+
+pub fn try_fold(
+  over stream: Stream(element),
+  from initial: acc,
+  with f: fn(acc, element) -> Result(acc, err),
+) -> Result(acc, err) {
+  todo
+}
+
+pub fn emit(element: a, next: fn() -> Stream(a)) -> Stream(a) {
+  Stream(None, fn(_) {
+    Continue(Some(element), fn(in) { next().continuation(in) })
+  })
+}
+
+pub fn prepend(stream: Stream(a), element: a) -> Stream(a) {
+  use <- emit(element)
+  stream
 }
 
 @external(erlang, "kino_ffi", "identity")
@@ -319,14 +475,14 @@ type Flow(in, out) {
     self: Subject(Message(in, out)),
     as_sink: Subject(Push(in)),
     as_source: Subject(Pull(out)),
-    source: Subject(Pull(in)),
+    sources: List(Subject(Pull(in))),
     sink: Subject(Push(out)),
     process: fn(in) -> Action(in, out),
   )
 }
 
 fn start_flow(
-  source: Subject(Pull(in)),
+  sources: List(Subject(Pull(in))),
   process: fn(in) -> Action(in, out),
 ) -> Result(Subject(Pull(out)), StartError) {
   let receiver = process.new_subject()
@@ -343,7 +499,14 @@ fn start_flow(
         |> process.selecting(as_source, FlowPull)
         |> process.selecting(as_sink, FlowPush)
       let flow =
-        Flow(self:, as_sink:, as_source:, source:, sink: dummy, process:)
+        Flow(
+          self:,
+          as_sink:,
+          as_source:,
+          sources: sources,
+          sink: dummy,
+          process:,
+        )
       process.send(receiver, as_source)
       actor.Ready(flow, selector)
     },
@@ -355,12 +518,14 @@ fn start_flow(
 }
 
 fn on_message(message: Message(in, out), flow: Flow(in, out)) {
+  use <- bool.guard(flow.sources == [], actor.Stop(Normal))
+  let assert [source, ..sources] = flow.sources
   case message {
     FlowPush(Some(element)) -> {
       let before = string.inspect(element)
       case flow.process(element) {
         Continue(None, process) -> {
-          process.send(flow.source, Pull(flow.as_sink))
+          process.send(source, Pull(flow.as_sink))
           actor.continue(Flow(..flow, process:))
         }
         Continue(Some(element), process) -> {
@@ -379,11 +544,21 @@ fn on_message(message: Message(in, out), flow: Flow(in, out)) {
       }
     }
     FlowPush(None) -> {
+      case sources {
+        [] -> {
+          process.send(flow.sink, None)
+          actor.Stop(Normal)
+        }
+        _ -> {
+          process.send(flow.as_source, Pull(flow.sink))
+          Flow(..flow, sources:) |> actor.continue
+        }
+      }
       process.send(flow.sink, None)
       actor.Stop(Normal)
     }
     FlowPull(Pull(sink)) -> {
-      process.send(flow.source, Pull(flow.as_sink))
+      process.send(source, Pull(flow.as_sink))
       Flow(..flow, sink:) |> actor.continue
     }
   }
