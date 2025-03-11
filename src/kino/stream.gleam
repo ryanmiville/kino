@@ -287,7 +287,24 @@ pub fn filter_map(
   stream: Stream(a),
   keeping_with f: fn(a) -> Result(b, c),
 ) -> Stream(b) {
-  todo
+  Stream(..stream, continuation: do_filter_map(stream.continuation, f))
+}
+
+fn do_filter_map(
+  continuation: fn(in) -> Action(in, a),
+  f: fn(a) -> Result(b, c),
+) -> fn(in) -> Action(in, b) {
+  fn(in) {
+    case continuation(in) {
+      Stop -> Stop
+      Continue(None, next) -> Continue(None, do_filter_map(next, f))
+      Continue(Some(e), next) ->
+        case f(e) {
+          Ok(e) -> Continue(Some(e), do_filter_map(next, f))
+          Error(_) -> Continue(None, do_filter_map(next, f))
+        }
+    }
+  }
 }
 
 pub fn transform(
@@ -342,15 +359,33 @@ pub fn range(from start: Int, to stop: Int) -> Stream(Int) {
 }
 
 pub fn index(over stream: Stream(element)) -> Stream(#(element, Int)) {
-  todo
+  let f = fn(state, el) { Next(#(el, state), state + 1) }
+  stream
+  |> transform(0, f)
 }
 
 pub fn drop(from stream: Stream(element), up_to desired: Int) -> Stream(element) {
-  todo
+  Stream(..stream, continuation: do_drop(stream.continuation, desired))
+}
+
+fn do_drop(
+  continuation: fn(in) -> Action(in, out),
+  desired: Int,
+) -> fn(in) -> Action(in, out) {
+  fn(in) {
+    case continuation(in) {
+      Stop -> Stop
+      Continue(e, next) ->
+        case desired > 0 {
+          True -> Continue(None, do_drop(next, desired - 1))
+          False -> Continue(e, next)
+        }
+    }
+  }
 }
 
 pub fn concat(from streams: List(Stream(element))) -> Stream(element) {
-  todo
+  flatten(from_list(streams))
 }
 
 pub fn iterate(
@@ -364,25 +399,83 @@ pub fn take_while(
   in stream: Stream(element),
   satisfying predicate: fn(element) -> Bool,
 ) -> Stream(element) {
-  todo
+  Stream(..stream, continuation: do_take_while(stream.continuation, predicate))
+}
+
+fn do_take_while(
+  continuation: fn(in) -> Action(in, out),
+  predicate: fn(out) -> Bool,
+) -> fn(in) -> Action(in, out) {
+  fn(in) {
+    case continuation(in) {
+      Stop -> Stop
+      Continue(None, next) -> Continue(None, do_take_while(next, predicate))
+      Continue(Some(e), next) ->
+        case predicate(e) {
+          True -> Continue(Some(e), do_take_while(next, predicate))
+          False -> Stop
+        }
+    }
+  }
 }
 
 pub fn drop_while(
   in stream: Stream(element),
   satisfying predicate: fn(element) -> Bool,
 ) -> Stream(element) {
-  todo
+  Stream(..stream, continuation: do_drop_while(stream.continuation, predicate))
+}
+
+fn do_drop_while(
+  continuation: fn(in) -> Action(in, out),
+  predicate: fn(out) -> Bool,
+) -> fn(in) -> Action(in, out) {
+  fn(in) {
+    case continuation(in) {
+      Stop -> Stop
+      Continue(None, next) -> Continue(None, do_take_while(next, predicate))
+      Continue(Some(e), next) ->
+        case predicate(e) {
+          True -> Continue(None, do_drop_while(next, predicate))
+          False -> Continue(Some(e), next)
+        }
+    }
+  }
 }
 
 pub fn zip(left: Stream(a), right: Stream(b)) -> Stream(#(a, b)) {
-  todo
+  let source =
+    fn() {
+      use left <- result.try(start(left))
+      use right <- result.try(start(right))
+      start_zipper(left, right)
+    }
+    |> unsafe_coerce
+  Stream(Some(source), unsafe_coerce(identity()))
+}
+
+fn next_element(stream: fn(in) -> Action(in, a)) -> fn(in) -> Action(in, a) {
+  fn(in) {
+    case stream(in) {
+      Stop -> Stop
+      Continue(None, next_left) -> Continue(None, next_element(next_left))
+      Continue(Some(el_left), next_left) ->
+        Continue(Some(el_left), next_element(next_left))
+    }
+  }
 }
 
 pub fn intersperse(
   over stream: Stream(element),
   with elem: element,
 ) -> Stream(element) {
-  todo
+  let source =
+    fn() {
+      use source <- result.try(start(stream))
+      start_intersperser(source, elem)
+    }
+    |> unsafe_coerce
+  Stream(Some(source), unsafe_coerce(identity()))
 }
 
 pub fn once(f: fn() -> element) -> Stream(element) {
@@ -393,15 +486,25 @@ pub fn interleave(
   left: Stream(element),
   with right: Stream(element),
 ) -> Stream(element) {
-  todo
+  let source =
+    fn() {
+      use left_source <- result.try(start(left))
+      use right_source <- result.try(start(right))
+      start_interleaver(left_source, right_source)
+    }
+    |> unsafe_coerce
+
+  Stream(Some(source), unsafe_coerce(identity()))
 }
 
 pub fn try_fold(
   over stream: Stream(element),
   from initial: acc,
   with f: fn(acc, element) -> Result(acc, err),
-) -> Result(acc, err) {
-  todo
+) -> Result(Result(acc, err), StartError) {
+  use source <- result.try(start(stream))
+  use sub <- result.map(start_try_sink(source, initial, f))
+  process.receive_forever(sub)
 }
 
 pub fn emit(element: a, next: fn() -> Stream(a)) -> Stream(a) {
@@ -626,7 +729,7 @@ fn on_message(message: Message(in, out), flow: Flow(in, out)) {
 }
 
 // -------------------------------
-// Flatterner
+// Flattener
 // -------------------------------
 type FlattenMessage(a) {
   StreamPush(Push(Stream(a)))
@@ -726,6 +829,526 @@ fn flattener_on_message(message: FlattenMessage(a), flow: Flattener(a)) {
           }
         }
       }
+    }
+  }
+}
+
+// -------------------------------
+// Zipper
+// -------------------------------
+type ZipMessage(a, b) {
+  LeftPush(Push(a))
+  RightPush(Push(b))
+  ZipPull(Pull(#(a, b)))
+}
+
+type Zipper(a, b) {
+  Zipper(
+    left_source: Subject(Pull(a)),
+    right_source: Subject(Pull(b)),
+    self: Subject(ZipMessage(a, b)),
+    as_source: Subject(Pull(#(a, b))),
+    as_left_sink: Subject(Push(a)),
+    as_right_sink: Subject(Push(b)),
+    left_buffer: List(a),
+    // Buffer for left elements
+    right_buffer: List(b),
+    // Buffer for right elements
+    sink: Subject(Push(#(a, b))),
+  )
+}
+
+fn start_zipper(
+  left_source: Subject(Pull(a)),
+  right_source: Subject(Pull(b)),
+) -> Result(Subject(Pull(#(a, b))), StartError) {
+  let receiver = process.new_subject()
+  let dummy = process.new_subject()
+
+  actor.Spec(
+    init: fn() {
+      let self = process.new_subject()
+      let as_source = process.new_subject()
+      let as_left_sink = process.new_subject()
+      let as_right_sink = process.new_subject()
+
+      let selector =
+        process.new_selector()
+        |> process.selecting(self, function.identity)
+        |> process.selecting(as_source, ZipPull)
+        |> process.selecting(as_left_sink, LeftPush)
+        |> process.selecting(as_right_sink, RightPush)
+
+      let zipper =
+        Zipper(
+          left_source: left_source,
+          right_source: right_source,
+          self: self,
+          as_source: as_source,
+          as_left_sink: as_left_sink,
+          as_right_sink: as_right_sink,
+          left_buffer: [],
+          right_buffer: [],
+          sink: dummy,
+        )
+
+      process.send(receiver, as_source)
+      actor.Ready(zipper, selector)
+    },
+    init_timeout: 1000,
+    loop: zipper_on_message,
+  )
+  |> actor.start_spec
+  |> result.map(fn(_) { process.receive_forever(receiver) })
+}
+
+fn zipper_on_message(message: ZipMessage(a, b), zipper: Zipper(a, b)) {
+  case message {
+    // Handle pull requests from downstream
+    ZipPull(Pull(sink)) -> {
+      // Store the sink for later
+      let zipper = Zipper(..zipper, sink: sink)
+
+      // Try to emit a tuple if we have elements in both buffers
+      case zipper.left_buffer, zipper.right_buffer {
+        [left, ..left_rest], [right, ..right_rest] -> {
+          // We have elements in both buffers, emit a tuple
+          process.send(zipper.sink, Some(#(left, right)))
+
+          // Continue with updated buffers
+          Zipper(..zipper, left_buffer: left_rest, right_buffer: right_rest)
+          |> actor.continue
+        }
+        _, _ -> {
+          // We need more elements, request from sources if buffers are empty
+          case zipper.left_buffer {
+            [] -> process.send(zipper.left_source, Pull(zipper.as_left_sink))
+            _ -> Nil
+          }
+
+          case zipper.right_buffer {
+            [] -> process.send(zipper.right_source, Pull(zipper.as_right_sink))
+            _ -> Nil
+          }
+
+          actor.continue(zipper)
+        }
+      }
+    }
+
+    // Handle elements from left source
+    LeftPush(Some(element)) -> {
+      let zipper =
+        Zipper(
+          ..zipper,
+          left_buffer: list.append(zipper.left_buffer, [element]),
+        )
+
+      // Try to emit if we have elements from both sources
+      case zipper.right_buffer {
+        [right, ..right_rest] -> {
+          case zipper.left_buffer {
+            [left, ..left_rest] -> {
+              process.send(zipper.sink, Some(#(left, right)))
+              Zipper(..zipper, left_buffer: left_rest, right_buffer: right_rest)
+              |> actor.continue
+            }
+            [] -> actor.continue(zipper)
+            // This shouldn't happen due to the append above
+          }
+        }
+        [] -> {
+          // We need more elements from the right source
+          process.send(zipper.right_source, Pull(zipper.as_right_sink))
+          actor.continue(zipper)
+        }
+      }
+    }
+
+    // Handle elements from right source
+    RightPush(Some(element)) -> {
+      let zipper =
+        Zipper(
+          ..zipper,
+          right_buffer: list.append(zipper.right_buffer, [element]),
+        )
+
+      // Try to emit if we have elements from both sources
+      case zipper.left_buffer {
+        [left, ..left_rest] -> {
+          case zipper.right_buffer {
+            [right, ..right_rest] -> {
+              process.send(zipper.sink, Some(#(left, right)))
+              Zipper(..zipper, left_buffer: left_rest, right_buffer: right_rest)
+              |> actor.continue
+            }
+            [] -> actor.continue(zipper)
+            // This shouldn't happen due to the append above
+          }
+        }
+        [] -> {
+          // We need more elements from the left source
+          process.send(zipper.left_source, Pull(zipper.as_left_sink))
+          actor.continue(zipper)
+        }
+      }
+    }
+
+    // Handle end of stream from either source
+    LeftPush(None) | RightPush(None) -> {
+      // If either source is done, we're done
+      process.send(zipper.sink, None)
+      actor.Stop(Normal)
+    }
+  }
+}
+
+// -------------------------------
+// Intersperser
+// -------------------------------
+type IntersperseMessage(element) {
+  IntersperserPush(Push(element))
+  IntersperserPull(Pull(element))
+}
+
+type IntersperserState(element) {
+  ElementNext
+  // Waiting for next element from source
+  SeparatorNext
+  // Ready to insert separator before next element
+}
+
+type Intersperser(element) {
+  Intersperser(
+    source: Subject(Pull(element)),
+    self: Subject(IntersperseMessage(element)),
+    as_source: Subject(Pull(element)),
+    as_sink: Subject(Push(element)),
+    sink: Subject(Push(element)),
+    separator: element,
+    state: IntersperserState(element),
+    // Holds the next element to emit after separator
+  )
+}
+
+fn start_intersperser(
+  source: Subject(Pull(element)),
+  separator: element,
+) -> Result(Subject(Pull(element)), StartError) {
+  let receiver = process.new_subject()
+  let dummy = process.new_subject()
+
+  actor.Spec(
+    init: fn() {
+      let self = process.new_subject()
+      let as_source = process.new_subject()
+      let as_sink = process.new_subject()
+
+      let selector =
+        process.new_selector()
+        |> process.selecting(self, function.identity)
+        |> process.selecting(as_source, IntersperserPull)
+        |> process.selecting(as_sink, IntersperserPush)
+
+      let intersperser =
+        Intersperser(
+          source: source,
+          self: self,
+          as_source: as_source,
+          as_sink: as_sink,
+          sink: dummy,
+          separator: separator,
+          state: ElementNext,
+        )
+
+      process.send(receiver, as_source)
+      actor.Ready(intersperser, selector)
+    },
+    init_timeout: 1000,
+    loop: intersperser_on_message,
+  )
+  |> actor.start_spec
+  |> result.map(fn(_) { process.receive_forever(receiver) })
+}
+
+fn intersperser_on_message(
+  message: IntersperseMessage(element),
+  intersperser: Intersperser(element),
+) {
+  case message {
+    // Handle pull requests from downstream
+    IntersperserPull(Pull(sink)) -> {
+      let intersperser = Intersperser(..intersperser, sink: sink)
+
+      case intersperser.state {
+        // Initial state or need element - request one from source
+        ElementNext -> {
+          process.send(intersperser.source, Pull(intersperser.as_sink))
+          actor.continue(intersperser)
+        }
+
+        // Ready to insert separator and have next element
+        SeparatorNext -> {
+          // Send separator first
+          process.send(intersperser.sink, Some(intersperser.separator))
+
+          // Next time we'll send the element we're holding
+          Intersperser(..intersperser, state: ElementNext)
+          |> actor.continue
+        }
+      }
+    }
+
+    // Handle elements from source
+    IntersperserPush(Some(element)) -> {
+      case intersperser.state {
+        // First element, emit directly
+        // Initial -> {
+        //   process.send(intersperser.sink, Some(element))
+        //   Intersperser(..intersperser, state: SeparatorNext, next_element: None)
+        //   |> actor.continue
+        // }
+        // Need element - this means we previously sent the separator
+        ElementNext -> {
+          // Send the element we were holding from before
+          process.send(intersperser.sink, Some(element))
+
+          // Next we'll need to insert separator
+          Intersperser(..intersperser, state: SeparatorNext)
+          |> actor.continue
+        }
+
+        // this shouldn't happen
+        SeparatorNext -> {
+          actor.continue(intersperser)
+        }
+      }
+    }
+
+    // Handle end of stream
+    IntersperserPush(None) -> {
+      // Signal end of stream downstream
+      process.send(intersperser.sink, None)
+      actor.Stop(Normal)
+    }
+  }
+}
+
+// -------------------------------
+// Interleaver
+// -------------------------------
+type InterleaveMessage(element) {
+  InterleavePush(Push(element))
+  InterleavePull(Pull(element))
+}
+
+type InterleaverState {
+  Left
+  Right
+}
+
+type Interleaver(element) {
+  Interleaver(
+    left_source: Subject(Pull(element)),
+    right_source: Subject(Pull(element)),
+    self: Subject(InterleaveMessage(element)),
+    as_source: Subject(Pull(element)),
+    as_sink: Subject(Push(element)),
+    current_state: InterleaverState,
+    // Track which source to pull from next
+    sink: Subject(Push(element)),
+    left_done: Bool,
+    // Track if left source is done
+    right_done: Bool,
+    // Track if right source is done
+  )
+}
+
+fn start_interleaver(
+  left_source: Subject(Pull(element)),
+  right_source: Subject(Pull(element)),
+) -> Result(Subject(Pull(element)), StartError) {
+  let receiver = process.new_subject()
+  let dummy = process.new_subject()
+
+  actor.Spec(
+    init: fn() {
+      let self = process.new_subject()
+      let as_source = process.new_subject()
+      let as_sink = process.new_subject()
+
+      let selector =
+        process.new_selector()
+        |> process.selecting(self, function.identity)
+        |> process.selecting(as_source, InterleavePull)
+        |> process.selecting(as_sink, InterleavePush)
+
+      let interleaver =
+        Interleaver(
+          left_source: left_source,
+          right_source: right_source,
+          self: self,
+          as_source: as_source,
+          as_sink: as_sink,
+          current_state: Left,
+          sink: dummy,
+          left_done: False,
+          right_done: False,
+        )
+
+      process.send(receiver, as_source)
+      actor.Ready(interleaver, selector)
+    },
+    init_timeout: 1000,
+    loop: interleaver_on_message,
+  )
+  |> actor.start_spec
+  |> result.map(fn(_) { process.receive_forever(receiver) })
+}
+
+fn interleaver_on_message(
+  message: InterleaveMessage(element),
+  interleaver: Interleaver(element),
+) {
+  case message {
+    // Handle pull requests from downstream
+    InterleavePull(Pull(sink)) -> {
+      // Store the sink for later
+      let interleaver = Interleaver(..interleaver, sink: sink)
+
+      // Check if we have elements available to emit
+      case interleaver.current_state {
+        // If current is left and we have left elements, emit from left
+        Left -> {
+          process.send(interleaver.left_source, Pull(interleaver.as_sink))
+          actor.continue(interleaver)
+        }
+
+        // If current is right and we have right elements, emit from right
+        Right -> {
+          process.send(interleaver.right_source, Pull(interleaver.as_sink))
+          actor.continue(interleaver)
+        }
+      }
+    }
+    InterleavePush(Some(element)) -> {
+      process.send(interleaver.sink, Some(element))
+      case
+        interleaver.current_state,
+        interleaver.left_done,
+        interleaver.right_done
+      {
+        // the other source is done
+        Left, _, True | Right, True, _ -> {
+          actor.continue(interleaver)
+        }
+        Left, _, False -> {
+          Interleaver(..interleaver, current_state: Right)
+          |> actor.continue
+        }
+        Right, False, _ -> {
+          Interleaver(..interleaver, current_state: Left)
+          |> actor.continue
+        }
+      }
+    }
+
+    InterleavePush(None) -> {
+      let interleaver = case interleaver.current_state {
+        Left -> {
+          Interleaver(..interleaver, left_done: True)
+        }
+        Right -> {
+          Interleaver(..interleaver, right_done: True)
+        }
+      }
+
+      case
+        interleaver.current_state,
+        interleaver.left_done,
+        interleaver.right_done
+      {
+        // all done
+        _, True, True -> {
+          process.send(interleaver.sink, None)
+          actor.Stop(Normal)
+        }
+        // swap to right or stay right if left is done
+        Left, _, False | Right, True, False -> {
+          process.send(interleaver.right_source, Pull(interleaver.as_sink))
+          Interleaver(..interleaver, current_state: Right)
+          |> actor.continue
+        }
+        // swap to left or stay left if right is done
+        Right, False, _ | Left, False, True -> {
+          process.send(interleaver.left_source, Pull(interleaver.as_sink))
+          Interleaver(..interleaver, current_state: Left)
+          |> actor.continue
+        }
+      }
+    }
+  }
+}
+
+// -------------------------------
+// Try Sink
+// -------------------------------
+fn start_try_sink(
+  source: Subject(Pull(element)),
+  initial: acc,
+  f: fn(acc, element) -> Result(acc, err),
+) -> Result(Subject(Result(acc, err)), StartError) {
+  let receiver = process.new_subject()
+  actor.Spec(
+    init: fn() {
+      let self = process.new_subject()
+      let selector =
+        process.new_selector()
+        |> process.selecting(self, function.identity)
+      process.send(source, Pull(self))
+      TrySink(self, source, initial, f, receiver)
+      |> actor.Ready(selector)
+    },
+    init_timeout: 1000,
+    loop: on_try_push,
+  )
+  |> actor.start_spec
+  |> result.map(fn(_) { receiver })
+}
+
+// Similar to Sink but with error handling
+type TrySink(acc, element, err) {
+  TrySink(
+    self: Subject(Push(element)),
+    source: Subject(Pull(element)),
+    accumulator: acc,
+    fold: fn(acc, element) -> Result(acc, err),
+    receiver: Subject(Result(acc, err)),
+  )
+}
+
+// Similar to on_push but handles errors
+fn on_try_push(message: Push(element), sink: TrySink(acc, element, err)) {
+  case message {
+    Some(element) -> {
+      logging.log(logging.Debug, "try_sink:   " <> string.inspect(element))
+      case sink.fold(sink.accumulator, element) {
+        Ok(accumulator) -> {
+          let sink = TrySink(..sink, accumulator:)
+          process.send(sink.source, Pull(sink.self))
+          actor.continue(sink)
+        }
+        Error(err) -> {
+          // If we encounter an error, send it to the receiver and stop
+          process.send(sink.receiver, Error(err))
+          actor.Stop(Normal)
+        }
+      }
+    }
+    None -> {
+      logging.log(logging.Debug, "try_sink:   None")
+      process.send(sink.receiver, Ok(sink.accumulator))
+      actor.Stop(Normal)
     }
   }
 }
