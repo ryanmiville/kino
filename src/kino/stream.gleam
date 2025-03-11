@@ -1,4 +1,5 @@
 import gleam/bool
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Subject, Normal}
 import gleam/function
 import gleam/int
@@ -18,13 +19,10 @@ type Action(in, out) {
 type Stage(element) =
   Result(Subject(Pull(element)), StartError)
 
-// A shameful hack
-type X
-
 pub opaque type Stream(element) {
   Stream(
-    source: Option(fn() -> Stage(X)),
-    continuation: fn(X) -> Action(X, element),
+    source: Option(fn() -> Stage(Dynamic)),
+    continuation: fn(Dynamic) -> Action(Dynamic, element),
   )
 }
 
@@ -106,7 +104,11 @@ fn do_map(
 
 pub fn async(stream: Stream(a)) -> Stream(a) {
   case stream {
-    Stream(None, continuation) -> do_async(unsafe_coerce(continuation))
+    Stream(None, _) ->
+      Stream(
+        Some(fn() { start(stream) |> unsafe_coerce }),
+        unsafe_coerce(identity()),
+      )
     Stream(Some(source), flow) -> {
       let new_source = fn() { start_with_flow(source(), flow) }
       Stream(unsafe_coerce(new_source), unsafe_coerce(identity()))
@@ -114,17 +116,9 @@ pub fn async(stream: Stream(a)) -> Stream(a) {
   }
 }
 
-fn do_async(continuation: fn(Nil) -> Action(Nil, a)) -> Stream(b) {
-  let action = do_unfold(Nil, fn(acc, a) { Next(a, acc) })
-  Stream(
-    Some(fn() { start_source(continuation) |> unsafe_coerce }),
-    unsafe_coerce(action),
-  )
-}
-
 fn start_with_flow(
-  source: Stage(X),
-  flow: fn(X) -> Action(X, element),
+  source: Stage(Dynamic),
+  flow: fn(Dynamic) -> Action(Dynamic, element),
 ) -> Stage(element) {
   use source <- result.try(source)
   start_flow([source], flow)
