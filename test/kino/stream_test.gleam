@@ -1,4 +1,5 @@
 import gleam/int
+import gleam/list
 import gleeunit/should
 import kino/stream.{Next}
 
@@ -109,6 +110,37 @@ pub fn iterate_test() {
   |> stream.take(5)
   |> stream.to_list
   |> should.equal(Ok([1, 3, 9, 27, 81]))
+}
+
+pub fn flat_map_test() {
+  let testcase = fn(subject, f, expect) {
+    subject
+    |> stream.from_list
+    |> stream.flat_map(f)
+    |> stream.to_list
+    |> should.equal(Ok(expect))
+  }
+
+  let f = fn(i) { stream.range(i, i + 2) }
+
+  testcase([], f, [])
+  testcase([1], f, [1, 2, 3])
+  testcase([1, 2], f, [1, 2, 3, 2, 3, 4])
+}
+
+pub fn flatten_test() {
+  let testcase = fn(lists) {
+    lists
+    |> list.map(stream.from_list)
+    |> stream.from_list
+    |> stream.flatten
+    |> stream.to_list
+    |> should.equal(Ok(list.flatten(lists)))
+  }
+
+  testcase([[], []])
+  testcase([[1], [2]])
+  testcase([[1, 2], [3, 4]])
 }
 
 pub fn emit_test() {

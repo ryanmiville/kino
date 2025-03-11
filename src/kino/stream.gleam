@@ -268,24 +268,19 @@ fn merge_stages(first: Stage(a), second: Stage(a)) -> Stage(a) {
 }
 
 pub fn flatten(stream: Stream(Stream(a))) -> Stream(a) {
-  map(stream, start)
-  todo
-}
-
-fn do_flatten(flow: fn(in) -> Action(in, Stream(a))) -> fn(in) -> Action(in, a) {
-  fn(in) {
-    case flow(in) {
-      Continue(Some(stream), next) -> {
-        todo
-      }
-      _ -> todo
-      Stop -> Stop
+  let source =
+    fn() {
+      use s <- result.try(start(stream))
+      start_flattener(s)
     }
-  }
+    |> unsafe_coerce
+  Stream(Some(source), unsafe_coerce(identity()))
 }
 
 pub fn flat_map(over stream: Stream(a), with f: fn(a) -> Stream(b)) -> Stream(b) {
-  todo
+  stream
+  |> map(f)
+  |> flatten
 }
 
 pub fn filter_map(
@@ -622,12 +617,115 @@ fn on_message(message: Message(in, out), flow: Flow(in, out)) {
           Flow(..flow, sources:) |> actor.continue
         }
       }
-      // process.send(flow.sink, None)
-      // actor.Stop(Normal)
     }
     FlowPull(Pull(sink)) -> {
       process.send(source, Pull(flow.as_sink))
       Flow(..flow, sink:) |> actor.continue
+    }
+  }
+}
+
+// -------------------------------
+// Flatterner
+// -------------------------------
+type FlattenMessage(a) {
+  StreamPush(Push(Stream(a)))
+  ElementPush(Push(a))
+  ElementPull(Pull(a))
+}
+
+type Flattener(a) {
+  Flattener(
+    initial: Subject(Pull(Stream(a))),
+    current: Option(Subject(Pull(a))),
+    self: Subject(FlattenMessage(a)),
+    as_source: Subject(Pull(a)),
+    as_sink: Subject(Push(a)),
+    as_stream_sink: Subject(Push(Stream(a))),
+    waiting: Bool,
+    sink: Subject(Push(a)),
+  )
+}
+
+fn start_flattener(
+  source: Subject(Pull(Stream(a))),
+) -> Result(Subject(Pull(a)), StartError) {
+  let receiver = process.new_subject()
+  let dummy = process.new_subject()
+  actor.Spec(
+    init: fn() {
+      let self = process.new_subject()
+      let as_source = process.new_subject()
+      let as_sink = process.new_subject()
+      let as_stream_sink = process.new_subject()
+
+      let selector =
+        process.new_selector()
+        |> process.selecting(self, function.identity)
+        |> process.selecting(as_source, ElementPull)
+        |> process.selecting(as_sink, ElementPush)
+        |> process.selecting(as_stream_sink, StreamPush)
+      let flow =
+        Flattener(
+          initial: source,
+          current: None,
+          self:,
+          as_sink:,
+          as_source:,
+          as_stream_sink:,
+          sink: dummy,
+          waiting: False,
+        )
+      process.send(receiver, as_source)
+      actor.Ready(flow, selector)
+    },
+    init_timeout: 1000,
+    loop: flattener_on_message,
+  )
+  |> actor.start_spec
+  |> result.map(fn(_) { process.receive_forever(receiver) })
+}
+
+fn flattener_on_message(message: FlattenMessage(a), flow: Flattener(a)) {
+  case message {
+    StreamPush(None) -> {
+      process.send(flow.sink, None)
+      actor.Stop(Normal)
+    }
+    StreamPush(Some(stream)) -> {
+      // TODO
+      let assert Ok(source) = start(stream)
+      process.send(source, Pull(flow.as_sink))
+      Flattener(..flow, current: Some(source))
+      |> actor.continue
+    }
+    ElementPush(Some(element)) -> {
+      process.send(flow.sink, Some(element))
+      actor.continue(flow)
+    }
+    ElementPush(None) -> {
+      process.send(flow.initial, Pull(flow.as_stream_sink))
+      Flattener(..flow, waiting: True, current: None)
+      |> actor.continue
+    }
+    ElementPull(Pull(sink)) -> {
+      case flow.current {
+        Some(source) -> {
+          process.send(source, Pull(flow.as_sink))
+          Flattener(..flow, sink:)
+          |> actor.continue
+        }
+        None -> {
+          case flow.waiting {
+            True -> actor.continue(flow)
+            False -> {
+              process.send(flow.initial, Pull(flow.as_stream_sink))
+              Flattener(..flow, waiting: True, current: None, sink:)
+              |> actor.continue
+            }
+          }
+        }
+      }
     }
   }
 }
