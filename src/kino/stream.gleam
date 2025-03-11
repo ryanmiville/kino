@@ -20,8 +20,9 @@ type Stage(element) =
   Result(Subject(Pull(element)), StartError)
 
 pub opaque type Stream(element) {
-  Stream(
-    source: Option(fn() -> Stage(Dynamic)),
+  Source(continuation: fn(Dynamic) -> Action(Dynamic, element))
+  Flow(
+    source: fn() -> Stage(Dynamic),
     continuation: fn(Dynamic) -> Action(Dynamic, element),
   )
 }
@@ -48,7 +49,7 @@ pub fn unfold(
   let step = fn(acc, _in) { f(acc) }
   initial
   |> do_unfold(step)
-  |> Stream(None, _)
+  |> Source
 }
 
 fn do_unfold(
@@ -86,7 +87,10 @@ pub fn single(element: element) -> Stream(element) {
 }
 
 pub fn map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
-  Stream(..stream, continuation: do_map(stream.continuation, f))
+  case stream {
+    Source(cont) -> Source(do_map(cont, f))
+    Flow(source, cont) -> Flow(source, do_map(cont, f))
+  }
 }
 
 fn do_map(
@@ -104,14 +108,11 @@ fn do_map(
 
 pub fn async(stream: Stream(a)) -> Stream(a) {
   case stream {
-    Stream(None, _) ->
-      Stream(
-        Some(fn() { start(stream) |> unsafe_coerce }),
-        unsafe_coerce(identity()),
-      )
-    Stream(Some(source), flow) -> {
+    Source(_) ->
+      Flow(fn() { start(stream) |> unsafe_coerce }, unsafe_coerce(identity()))
+    Flow(source, flow) -> {
       let new_source = fn() { start_with_flow(source(), flow) }
-      Stream(unsafe_coerce(new_source), unsafe_coerce(identity()))
+      Flow(unsafe_coerce(new_source), unsafe_coerce(identity()))
     }
   }
 }
@@ -125,12 +126,15 @@ fn start_with_flow(
 }
 
 pub fn empty() -> Stream(element) {
-  Stream(None, stop)
+  Source(stop)
 }
 
 pub fn take(stream: Stream(element), desired: Int) -> Stream(element) {
   use <- bool.lazy_guard(desired <= 0, empty)
-  Stream(..stream, continuation: do_take(stream.continuation, desired))
+  case stream {
+    Source(cont) -> Source(do_take(cont, desired))
+    Flow(source, flow) -> Flow(source, do_take(flow, desired))
+  }
 }
 
 fn do_take(
@@ -150,8 +154,10 @@ fn do_take(
 }
 
 pub fn filter(stream: Stream(a), keeping predicate: fn(a) -> Bool) -> Stream(a) {
-  let continuation = do_filter(stream.continuation, predicate)
-  Stream(..stream, continuation:)
+  case stream {
+    Source(cont) -> Source(do_filter(cont, predicate))
+    Flow(source, cont) -> Flow(source, do_filter(cont, predicate))
+  }
 }
 
 fn do_filter(
@@ -196,17 +202,16 @@ pub fn to_list(stream: Stream(element)) -> Result(List(element), StartError) {
 
 fn start(stream: Stream(element)) -> Stage(element) {
   case stream {
-    Stream(None, continuation) -> start_source(unsafe_coerce(continuation))
-    Stream(Some(source), flow) -> start_with_flow(source(), flow)
+    Source(continuation) -> start_source(unsafe_coerce(continuation))
+    Flow(source, flow) -> start_with_flow(source(), flow)
   }
 }
 
 pub fn append(to first: Stream(a), suffix second: Stream(a)) -> Stream(a) {
   case first, second {
-    Stream(None, c1), Stream(None, c2) ->
-      Stream(None, append_continuation(c1, c2))
+    Source(c1), Source(c2) -> Source(append_continuation(c1, c2))
 
-    Stream(None, c1), Stream(Some(s2), c2) -> {
+    Source(c1), Flow(s2, c2) -> {
       let source =
         fn() {
           let s1 = start_source(unsafe_coerce(c1))
@@ -215,20 +220,20 @@ pub fn append(to first: Stream(a), suffix second: Stream(a)) -> Stream(a) {
           merge_stages(s1, s2)
         }
         |> unsafe_coerce
-      Stream(Some(source), unsafe_coerce(identity()))
+      Flow(source, unsafe_coerce(identity()))
     }
 
-    Stream(Some(s1), c1), Stream(None, c2) -> {
+    Flow(s1, c1), Source(c2) -> {
       let source = fn() {
         use s1 <- result.try(s1())
         let s1 = start_flow([s1], c1) |> unsafe_coerce
         let s2 = start_source(unsafe_coerce(c2))
         merge_stages(s1, s2)
       }
-      Stream(Some(source), unsafe_coerce(identity()))
+      Flow(source, unsafe_coerce(identity()))
     }
 
-    Stream(Some(s1), c1), Stream(Some(s2), c2) -> {
+    Flow(s1, c1), Flow(s2, c2) -> {
       let source =
         fn() {
           use s1 <- result.try(s1())
@@ -238,7 +243,7 @@ pub fn append(to first: Stream(a), suffix second: Stream(a)) -> Stream(a) {
           merge_stages(s1, s2)
         }
         |> unsafe_coerce
-      Stream(Some(source), unsafe_coerce(identity()))
+      Flow(source, unsafe_coerce(identity()))
     }
   }
 }
@@ -268,7 +273,7 @@ pub fn flatten(stream: Stream(Stream(a))) -> Stream(a) {
       start_flattener(s)
     }
     |> unsafe_coerce
-  Stream(Some(source), unsafe_coerce(identity()))
+  Flow(source, unsafe_coerce(identity()))
 }
 
 pub fn flat_map(over stream: Stream(a), with f: fn(a) -> Stream(b)) -> Stream(b) {
@@ -281,7 +286,10 @@ pub fn filter_map(
   stream: Stream(a),
   keeping_with f: fn(a) -> Result(b, c),
 ) -> Stream(b) {
-  Stream(..stream, continuation: do_filter_map(stream.continuation, f))
+  case stream {
+    Source(cont) -> Source(do_filter_map(cont, f))
+    Flow(source, cont) -> Flow(source, do_filter_map(cont, f))
+  }
 }
 
 fn do_filter_map(
@@ -306,10 +314,10 @@ pub fn transform(
   from initial: acc,
   with f: fn(acc, a) -> Step(b, acc),
 ) -> Stream(b) {
-  Stream(
-    ..stream,
-    continuation: transform_loop(stream.continuation, initial, f),
-  )
+  case stream {
+    Source(cont) -> Source(transform_loop(cont, initial, f))
+    Flow(source, cont) -> Flow(source, transform_loop(cont, initial, f))
+  }
 }
 
 fn transform_loop(
@@ -359,7 +367,10 @@ pub fn index(over stream: Stream(element)) -> Stream(#(element, Int)) {
 }
 
 pub fn drop(from stream: Stream(element), up_to desired: Int) -> Stream(element) {
-  Stream(..stream, continuation: do_drop(stream.continuation, desired))
+  case stream {
+    Source(cont) -> Source(do_drop(cont, desired))
+    Flow(source, cont) -> Flow(source, do_drop(cont, desired))
+  }
 }
 
 fn do_drop(
@@ -393,7 +404,10 @@ pub fn take_while(
   in stream: Stream(element),
   satisfying predicate: fn(element) -> Bool,
 ) -> Stream(element) {
-  Stream(..stream, continuation: do_take_while(stream.continuation, predicate))
+  case stream {
+    Source(cont) -> Source(do_take_while(cont, predicate))
+    Flow(source, cont) -> Flow(source, do_take_while(cont, predicate))
+  }
 }
 
 fn do_take_while(
@@ -417,7 +431,10 @@ pub fn drop_while(
   in stream: Stream(element),
   satisfying predicate: fn(element) -> Bool,
 ) -> Stream(element) {
-  Stream(..stream, continuation: do_drop_while(stream.continuation, predicate))
+  case stream {
+    Source(cont) -> Source(do_drop_while(cont, predicate))
+    Flow(source, cont) -> Flow(source, do_drop_while(cont, predicate))
+  }
 }
 
 fn do_drop_while(
@@ -445,7 +462,7 @@ pub fn zip(left: Stream(a), right: Stream(b)) -> Stream(#(a, b)) {
       start_zipper(left, right)
     }
     |> unsafe_coerce
-  Stream(Some(source), unsafe_coerce(identity()))
+  Flow(source, unsafe_coerce(identity()))
 }
 
 fn next_element(stream: fn(in) -> Action(in, a)) -> fn(in) -> Action(in, a) {
@@ -469,11 +486,11 @@ pub fn intersperse(
       start_intersperser(source, elem)
     }
     |> unsafe_coerce
-  Stream(Some(source), unsafe_coerce(identity()))
+  Flow(source, unsafe_coerce(identity()))
 }
 
 pub fn once(f: fn() -> element) -> Stream(element) {
-  Stream(None, fn(_) { Continue(Some(f()), stop) })
+  Source(fn(_) { Continue(Some(f()), stop) })
 }
 
 pub fn interleave(
@@ -488,7 +505,7 @@ pub fn interleave(
     }
     |> unsafe_coerce
 
-  Stream(Some(source), unsafe_coerce(identity()))
+  Flow(source, unsafe_coerce(identity()))
 }
 
 pub fn try_fold(
@@ -502,9 +519,12 @@ pub fn try_fold(
 }
 
 pub fn emit(element: a, next: fn() -> Stream(a)) -> Stream(a) {
-  Stream(None, fn(_) {
-    Continue(Some(element), fn(in) { next().continuation(in) })
-  })
+  use _ <- Source
+  use in <- Continue(Some(element))
+  case next() {
+    Source(cont) -> cont(in)
+    Flow(_, cont) -> cont(in)
+  }
 }
 
 pub fn prepend(stream: Stream(a), element: a) -> Stream(a) {
@@ -629,8 +649,8 @@ type Message(in, out) {
   FlowPull(Pull(out))
 }
 
-type Flow(in, out) {
-  Flow(
+type FlowState(in, out) {
+  FlowState(
     self: Subject(Message(in, out)),
     as_sink: Subject(Push(in)),
     as_source: Subject(Pull(out)),
@@ -658,7 +678,7 @@ fn start_flow(
         |> process.selecting(as_source, FlowPull)
         |> process.selecting(as_sink, FlowPush)
       let flow =
-        Flow(
+        FlowState(
           self:,
           as_sink:,
           as_source:,
@@ -676,7 +696,7 @@ fn start_flow(
   |> result.map(fn(_) { process.receive_forever(receiver) })
 }
 
-fn on_message(message: Message(in, out), flow: Flow(in, out)) {
+fn on_message(message: Message(in, out), flow: FlowState(in, out)) {
   use <- bool.lazy_guard(flow.sources == [], fn() { actor.Stop(Normal) })
   let assert [source, ..sources] = flow.sources
   case message {
@@ -685,7 +705,7 @@ fn on_message(message: Message(in, out), flow: Flow(in, out)) {
       case flow.process(element) {
         Continue(None, process) -> {
           process.send(source, Pull(flow.as_sink))
-          actor.continue(Flow(..flow, process:))
+          actor.continue(FlowState(..flow, process:))
         }
         Continue(Some(element), process) -> {
           logging.log(
@@ -693,7 +713,7 @@ fn on_message(message: Message(in, out), flow: Flow(in, out)) {
             "flow:   " <> before <> " -> " <> string.inspect(element),
           )
           process.send(flow.sink, Some(element))
-          let flow = Flow(..flow, process:)
+          let flow = FlowState(..flow, process:)
           actor.continue(flow)
         }
         Stop -> {
@@ -711,13 +731,13 @@ fn on_message(message: Message(in, out), flow: Flow(in, out)) {
         _ -> {
           logging.log(logging.Debug, "flow:   next source")
           process.send(flow.as_source, Pull(flow.sink))
-          Flow(..flow, sources:) |> actor.continue
+          FlowState(..flow, sources:) |> actor.continue
         }
       }
     }
     FlowPull(Pull(sink)) -> {
       process.send(source, Pull(flow.as_sink))
-      Flow(..flow, sink:) |> actor.continue
+      FlowState(..flow, sink:) |> actor.continue
     }
   }
 }
