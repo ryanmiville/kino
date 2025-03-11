@@ -13,7 +13,8 @@ import logging
 
 type Action(in, out) {
   Stop
-  Continue(Option(out), fn(in) -> Action(in, out))
+  Continue(fn(in) -> Action(in, out))
+  Emit(out, fn(in) -> Action(in, out))
 }
 
 type Stage(element) =
@@ -58,7 +59,7 @@ fn do_unfold(
 ) -> fn(in) -> Action(in, out) {
   fn(in) {
     case f(initial, in) {
-      Next(x, acc) -> Continue(Some(x), do_unfold(acc, f))
+      Next(x, acc) -> Emit(x, do_unfold(acc, f))
       Done -> Stop
     }
   }
@@ -100,8 +101,8 @@ fn do_map(
   fn(in) {
     case continuation(in) {
       Stop -> Stop
-      Continue(e, continuation) ->
-        Continue(option.map(e, f), do_map(continuation, f))
+      Continue(next) -> Continue(do_map(next, f))
+      Emit(e, continuation) -> Emit(f(e), do_map(continuation, f))
     }
   }
 }
@@ -147,7 +148,8 @@ fn do_take(
       True ->
         case continuation(in) {
           Stop -> Stop
-          Continue(e, next) -> Continue(e, do_take(next, desired - 1))
+          Continue(next) -> Continue(do_take(next, desired - 1))
+          Emit(e, next) -> Emit(e, do_take(next, desired - 1))
         }
     }
   }
@@ -167,21 +169,13 @@ fn do_filter(
   fn(in) {
     case continuation(in) {
       Stop -> Stop
-      Continue(e, stream) ->
-        Continue(filter_option(e, predicate), do_filter(stream, predicate))
+      Continue(next) -> Continue(do_filter(next, predicate))
+      Emit(e, stream) ->
+        case predicate(e) {
+          True -> Emit(e, do_filter(stream, predicate))
+          False -> Continue(do_filter(stream, predicate))
+        }
     }
-  }
-}
-
-fn filter_option(option: Option(a), predicate: fn(a) -> Bool) -> Option(a) {
-  case option {
-    Some(value) -> {
-      case predicate(value) {
-        True -> Some(value)
-        False -> None
-      }
-    }
-    None -> None
   }
 }
 
@@ -254,7 +248,8 @@ fn append_continuation(
 ) -> fn(in) -> Action(in, a) {
   fn(in) {
     case first(in) {
-      Continue(a, next) -> Continue(a, append_continuation(next, second))
+      Emit(a, next) -> Emit(a, append_continuation(next, second))
+      Continue(next) -> Continue(append_continuation(next, second))
       Stop -> second(in)
     }
   }
@@ -299,11 +294,11 @@ fn do_filter_map(
   fn(in) {
     case continuation(in) {
       Stop -> Stop
-      Continue(None, next) -> Continue(None, do_filter_map(next, f))
-      Continue(Some(e), next) ->
+      Continue(next) -> Continue(do_filter_map(next, f))
+      Emit(e, next) ->
         case f(e) {
-          Ok(e) -> Continue(Some(e), do_filter_map(next, f))
-          Error(_) -> Continue(None, do_filter_map(next, f))
+          Ok(e) -> Emit(e, do_filter_map(next, f))
+          Error(_) -> Continue(do_filter_map(next, f))
         }
     }
   }
@@ -328,12 +323,12 @@ fn transform_loop(
   fn(in) {
     case continuation(in) {
       Stop -> Stop
-      Continue(None, next) -> Continue(None, transform_loop(next, state, f))
-      Continue(Some(el), next) ->
+      Continue(next) -> Continue(transform_loop(next, state, f))
+      Emit(el, next) ->
         case f(state, el) {
           Done -> Stop
           Next(yield, next_state) ->
-            Continue(Some(yield), transform_loop(next, next_state, f))
+            Emit(yield, transform_loop(next, next_state, f))
         }
     }
   }
@@ -380,10 +375,15 @@ fn do_drop(
   fn(in) {
     case continuation(in) {
       Stop -> Stop
-      Continue(e, next) ->
+      Emit(e, next) ->
         case desired > 0 {
-          True -> Continue(None, do_drop(next, desired - 1))
-          False -> Continue(e, next)
+          True -> Continue(do_drop(next, desired - 1))
+          False -> Emit(e, next)
+        }
+      Continue(next) ->
+        case desired > 0 {
+          True -> Continue(do_drop(next, desired - 1))
+          False -> Continue(next)
         }
     }
   }
@@ -417,10 +417,10 @@ fn do_take_while(
   fn(in) {
     case continuation(in) {
       Stop -> Stop
-      Continue(None, next) -> Continue(None, do_take_while(next, predicate))
-      Continue(Some(e), next) ->
+      Continue(next) -> Continue(do_take_while(next, predicate))
+      Emit(e, next) ->
         case predicate(e) {
-          True -> Continue(Some(e), do_take_while(next, predicate))
+          True -> Emit(e, do_take_while(next, predicate))
           False -> Stop
         }
     }
@@ -444,11 +444,11 @@ fn do_drop_while(
   fn(in) {
     case continuation(in) {
       Stop -> Stop
-      Continue(None, next) -> Continue(None, do_take_while(next, predicate))
-      Continue(Some(e), next) ->
+      Continue(next) -> Continue(do_take_while(next, predicate))
+      Emit(e, next) ->
         case predicate(e) {
-          True -> Continue(None, do_drop_while(next, predicate))
-          False -> Continue(Some(e), next)
+          True -> Continue(do_drop_while(next, predicate))
+          False -> Emit(e, next)
         }
     }
   }
@@ -469,9 +469,8 @@ fn next_element(stream: fn(in) -> Action(in, a)) -> fn(in) -> Action(in, a) {
   fn(in) {
     case stream(in) {
       Stop -> Stop
-      Continue(None, next_left) -> Continue(None, next_element(next_left))
-      Continue(Some(el_left), next_left) ->
-        Continue(Some(el_left), next_element(next_left))
+      Continue(next_left) -> Continue(next_element(next_left))
+      Emit(el_left, next_left) -> Emit(el_left, next_element(next_left))
     }
   }
 }
@@ -490,7 +489,7 @@ pub fn intersperse(
 }
 
 pub fn once(f: fn() -> element) -> Stream(element) {
-  Source(fn(_) { Continue(Some(f()), stop) })
+  Source(fn(_) { Emit(f(), stop) })
 }
 
 pub fn interleave(
@@ -520,7 +519,7 @@ pub fn try_fold(
 
 pub fn emit(element: a, next: fn() -> Stream(a)) -> Stream(a) {
   use _ <- Source
-  use in <- Continue(Some(element))
+  use in <- Emit(element)
   case next() {
     Source(cont) -> cont(in)
     Flow(_, cont) -> cont(in)
@@ -569,12 +568,12 @@ fn start_source(
 
 fn on_pull(message: Pull(element), source: SourceState(element)) {
   case source.emit(Nil) {
-    Continue(Some(chunk), emit) -> {
+    Emit(chunk, emit) -> {
       logging.log(logging.Debug, "source: " <> string.inspect(chunk))
       process.send(message.reply_to, Some(chunk))
       SourceState(..source, emit:) |> actor.continue
     }
-    Continue(None, emit) -> {
+    Continue(emit) -> {
       process.send(source.self, message)
       SourceState(..source, emit:) |> actor.continue
     }
@@ -703,11 +702,11 @@ fn on_message(message: Message(in, out), flow: FlowState(in, out)) {
     FlowPush(Some(element)) -> {
       let before = string.inspect(element)
       case flow.process(element) {
-        Continue(None, process) -> {
+        Continue(process) -> {
           process.send(source, Pull(flow.as_sink))
           actor.continue(FlowState(..flow, process:))
         }
-        Continue(Some(element), process) -> {
+        Emit(element, process) -> {
           logging.log(
             logging.Debug,
             "flow:   " <> before <> " -> " <> string.inspect(element),
@@ -929,7 +928,7 @@ fn zipper_on_message(message: ZipMessage(a, b), zipper: Zipper(a, b)) {
           // We have elements in both buffers, emit a tuple
           process.send(zipper.sink, Some(#(left, right)))
 
-          // Continue with updated buffers
+          // Emit with updated buffers
           Zipper(..zipper, left_buffer: left_rest, right_buffer: right_rest)
           |> actor.continue
         }
