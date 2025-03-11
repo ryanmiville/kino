@@ -677,7 +677,7 @@ fn start_flow(
 }
 
 fn on_message(message: Message(in, out), flow: Flow(in, out)) {
-  use <- bool.guard(flow.sources == [], actor.Stop(Normal))
+  use <- bool.lazy_guard(flow.sources == [], fn() { actor.Stop(Normal) })
   let assert [source, ..sources] = flow.sources
   case message {
     FlowPush(Some(element)) -> {
