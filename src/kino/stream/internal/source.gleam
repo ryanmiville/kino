@@ -2,9 +2,7 @@ import gleam/erlang/process.{type Subject, Normal}
 import gleam/function
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
-import gleam/string
 import kino/stream/internal/action.{type Action, Continue, Emit, Stop}
-import logging
 
 pub type Pull(element) {
   Pull(reply_to: Subject(Option(element)))
@@ -35,7 +33,6 @@ pub fn start(
 fn on_message(message: Pull(element), source: State(element)) {
   case source.emit(Nil) {
     Emit(chunk, emit) -> {
-      logging.log(logging.Debug, "source: " <> string.inspect(chunk))
       process.send(message.reply_to, Some(chunk))
       State(..source, emit:) |> actor.continue
     }

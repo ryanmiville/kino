@@ -4,10 +4,8 @@ import gleam/function
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
 import gleam/result
-import gleam/string
 import kino/stream/internal/action.{type Action, Continue, Emit, Stop}
 import kino/stream/internal/source
-import logging
 
 type Message(in, out) {
   Push(Option(in))
@@ -66,17 +64,12 @@ fn on_message(message: Message(in, out), flow: State(in, out)) {
   let assert [source, ..sources] = flow.sources
   case message {
     Push(Some(element)) -> {
-      let before = string.inspect(element)
       case flow.process(element) {
         Continue(process) -> {
           process.send(source, source.Pull(flow.as_sink))
           actor.continue(State(..flow, process:))
         }
         Emit(element, process) -> {
-          logging.log(
-            logging.Debug,
-            "flow:   " <> before <> " -> " <> string.inspect(element),
-          )
           process.send(flow.sink, Some(element))
           let flow = State(..flow, process:)
           actor.continue(flow)
@@ -94,7 +87,6 @@ fn on_message(message: Message(in, out), flow: State(in, out)) {
           actor.Stop(Normal)
         }
         _ -> {
-          logging.log(logging.Debug, "flow:   next source")
           process.send(flow.as_source, source.Pull(flow.sink))
           State(..flow, sources:) |> actor.continue
         }
