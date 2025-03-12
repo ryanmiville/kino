@@ -84,7 +84,7 @@ pub fn from_list(elements: List(element)) -> Stream(element) {
 }
 
 pub fn single(element: element) -> Stream(element) {
-  from_list([element])
+  once(fn() { element })
 }
 
 pub fn map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
