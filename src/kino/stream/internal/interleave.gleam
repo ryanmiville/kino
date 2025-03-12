@@ -68,16 +68,13 @@ pub fn start(
       actor.Ready(interleaver, selector)
     },
     init_timeout: 1000,
-    loop: interleaver_on_message,
+    loop: on_message,
   )
   |> actor.start_spec
   |> result.map(fn(_) { process.receive_forever(receiver) })
 }
 
-fn interleaver_on_message(
-  message: Message(element),
-  interleaver: State(element),
-) {
+fn on_message(message: Message(element), interleaver: State(element)) {
   case message {
     // Handle pull requests from downstream
     InterleavePull(source.Pull(sink)) -> {

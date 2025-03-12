@@ -60,13 +60,13 @@ pub fn start(
       actor.Ready(flow, selector)
     },
     init_timeout: 1000,
-    loop: flattener_on_message,
+    loop: on_message,
   )
   |> actor.start_spec
   |> result.map(fn(_) { process.receive_forever(receiver) })
 }
 
-fn flattener_on_message(message: Message(a), flow: State(a)) {
+fn on_message(message: Message(a), flow: State(a)) {
   case message {
     SourcePush(None) -> {
       process.send(flow.sink, None)
