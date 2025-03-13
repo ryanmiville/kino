@@ -11,7 +11,7 @@ type State(acc, element) {
     source: Subject(source.Pull(element)),
     accumulator: acc,
     fold: fn(acc, element) -> acc,
-    receiver: Subject(acc),
+    receiver: Subject(Result(acc, StartError)),
   )
 }
 
@@ -19,8 +19,8 @@ pub fn start(
   source: Subject(source.Pull(element)),
   initial: acc,
   f: fn(acc, element) -> acc,
-) -> Result(Subject(acc), StartError) {
-  let receiver = process.new_subject()
+  receiver: Subject(Result(acc, StartError)),
+) -> Result(Nil, StartError) {
   actor.Spec(
     init: fn() {
       let self = process.new_subject()
@@ -35,7 +35,7 @@ pub fn start(
     loop: on_message,
   )
   |> actor.start_spec
-  |> result.map(fn(_) { receiver })
+  |> result.replace(Nil)
 }
 
 fn on_message(message: Option(element), sink: State(acc, element)) {
@@ -47,7 +47,7 @@ fn on_message(message: Option(element), sink: State(acc, element)) {
       actor.continue(sink)
     }
     None -> {
-      process.send(sink.receiver, sink.accumulator)
+      process.send(sink.receiver, Ok(sink.accumulator))
       actor.Stop(Normal)
     }
   }

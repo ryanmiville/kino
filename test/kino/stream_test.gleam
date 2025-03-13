@@ -1,3 +1,4 @@
+import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleeunit/should
@@ -6,12 +7,14 @@ import kino/stream.{Next}
 pub fn single_test() {
   stream.single(1)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([1]))
 }
 
 pub fn from_list_test() {
   stream.from_list([1, 2, 3])
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([1, 2, 3]))
 }
 
@@ -19,6 +22,7 @@ pub fn map_test() {
   stream.from_list([1, 2, 3])
   |> stream.map(int.multiply(_, 2))
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([2, 4, 6]))
 }
 
@@ -27,6 +31,7 @@ pub fn take_test() {
   counter
   |> stream.take(3)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([0, 1, 2]))
 }
 
@@ -34,6 +39,7 @@ pub fn drop_test() {
   stream.range(0, 10)
   |> stream.drop(5)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal([5, 6, 7, 8, 9, 10] |> Ok)
 }
 
@@ -41,6 +47,7 @@ pub fn filter_test() {
   stream.from_list([1, 2, 3])
   |> stream.filter(int.is_even)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([2]))
 }
 
@@ -50,6 +57,7 @@ pub fn filter_map_test() {
     |> stream.from_list
     |> stream.filter_map(f)
     |> stream.to_list
+    |> process.receive_forever
     |> should.equal(list.filter_map(subject, f) |> Ok)
   }
 
@@ -66,6 +74,7 @@ pub fn repeat_test() {
   stream.repeat(1)
   |> stream.take(4)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([1, 1, 1, 1]))
 }
 
@@ -73,6 +82,7 @@ pub fn index_test() {
   stream.from_list(["a", "b", "c"])
   |> stream.index
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([#("a", 0), #("b", 1), #("c", 2)]))
 }
 
@@ -80,6 +90,7 @@ pub fn append_test() {
   stream.from_list([1, 2, 3])
   |> stream.append(stream.from_list([4, 5, 6]))
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([1, 2, 3, 4, 5, 6]))
 
   stream.from_list([1, 2, 3])
@@ -88,6 +99,7 @@ pub fn append_test() {
     stream.from_list([4, 5, 6]) |> stream.map(int.multiply(_, 2)),
   )
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([2, 4, 6, 8, 10, 12]))
 
   stream.from_list([1, 2, 3])
@@ -97,6 +109,7 @@ pub fn append_test() {
     stream.from_list([4, 5, 6]) |> stream.map(int.multiply(_, 2)),
   )
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([2, 4, 6, 8, 10, 12]))
 
   stream.from_list([1, 2, 3])
@@ -107,6 +120,7 @@ pub fn append_test() {
     |> stream.map(int.multiply(_, 2)),
   )
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([2, 4, 6, 8, 10, 12]))
 
   stream.from_list([1, 2, 3])
@@ -118,6 +132,7 @@ pub fn append_test() {
     |> stream.map(int.multiply(_, 2)),
   )
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([2, 4, 6, 8, 10, 12]))
 }
 
@@ -125,6 +140,7 @@ pub fn range_test() {
   let testcase = fn(a, b, expected) {
     stream.range(a, b)
     |> stream.to_list
+    |> process.receive_forever
     |> should.equal(Ok(expected))
   }
 
@@ -141,6 +157,7 @@ pub fn iterate_test() {
   |> stream.iterate(from: 1)
   |> stream.take(5)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([1, 3, 9, 27, 81]))
 }
 
@@ -148,6 +165,7 @@ pub fn take_while_test() {
   stream.from_list([1, 2, 3, 2, 4])
   |> stream.take_while(satisfying: fn(x) { x < 3 })
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([1, 2]))
 }
 
@@ -155,6 +173,7 @@ pub fn drop_while_test() {
   stream.from_list([1, 2, 3, 4, 2, 5])
   |> stream.drop_while(satisfying: fn(x) { x < 4 })
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([4, 2, 5]))
 }
 
@@ -162,6 +181,7 @@ pub fn zip_test() {
   stream.from_list(["a", "b", "c"])
   |> stream.zip(stream.range(20, 30))
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal([#("a", 20), #("b", 21), #("c", 22)] |> Ok)
 }
 
@@ -171,6 +191,7 @@ pub fn flat_map_test() {
     |> stream.from_list
     |> stream.flat_map(f)
     |> stream.to_list
+    |> process.receive_forever
     |> should.equal(Ok(expect))
   }
 
@@ -188,6 +209,7 @@ pub fn flatten_test() {
     |> stream.from_list
     |> stream.flatten
     |> stream.to_list
+    |> process.receive_forever
     |> should.equal(Ok(list.flatten(lists)))
   }
 
@@ -202,6 +224,7 @@ pub fn concat_test() {
     |> list.map(stream.from_list)
     |> stream.concat
     |> stream.to_list
+    |> process.receive_forever
     |> should.equal(list.flatten(lists) |> Ok)
   }
 
@@ -215,16 +238,19 @@ pub fn intersperse_test() {
   stream.empty()
   |> stream.intersperse(with: 0)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([]))
 
   stream.from_list([1])
   |> stream.intersperse(with: 0)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([1, 0]))
 
   stream.from_list([1, 2, 3, 4, 5])
   |> stream.intersperse(with: 0)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([1, 0, 2, 0, 3, 0, 4, 0, 5, 0]))
 }
 
@@ -238,6 +264,7 @@ pub fn emit_test() {
 
   items
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([1, 2, 3]))
 }
 
@@ -253,6 +280,7 @@ pub fn emit_computes_only_necessary_values_test() {
   items
   |> stream.take(3)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([1, 2, 3]))
 }
 
@@ -260,6 +288,7 @@ pub fn prepend_test() {
   stream.from_list([1, 2, 3])
   |> stream.prepend(0)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([0, 1, 2, 3]))
 }
 
@@ -270,6 +299,7 @@ pub fn transform_index_test() {
   |> stream.from_list
   |> stream.transform(0, f)
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([#(0, "a"), #(1, "b"), #(2, "c"), #(3, "d")]))
 }
 
@@ -277,11 +307,13 @@ pub fn interleave_test() {
   stream.from_list([1, 2, 3, 4])
   |> stream.interleave(with: stream.from_list([11, 12, 13, 14]))
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal([1, 11, 2, 12, 3, 13, 4, 14] |> Ok)
 
   stream.from_list([1, 2, 3, 4])
   |> stream.interleave(with: stream.from_list([100]))
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal([1, 100, 2, 3, 4] |> Ok)
 }
 
@@ -294,6 +326,7 @@ pub fn try_fold_test() {
     subject
     |> stream.from_list()
     |> stream.try_fold(acc, fun)
+    |> process.receive_forever
     |> should.equal(Ok(list.try_fold(subject, acc, fun)))
   }
 
@@ -311,16 +344,19 @@ pub fn try_fold_test() {
   [0, 2, 4, 6]
   |> stream.from_list()
   |> stream.try_fold(0, f)
+  |> process.receive_forever
   |> should.equal(Ok(Ok(12)))
 
   [1, 2, 3, 4]
   |> stream.from_list()
   |> stream.try_fold(0, f)
+  |> process.receive_forever
   |> should.equal(Ok(Error("tried to add an odd number")))
   // TCO test
   // stream.repeat(1)
   // |> stream.take(recursion_test_cycles)
   // |> stream.try_fold(0, fn(e, acc) { Ok(e + acc) })
+  // |> process.receive_forever
 }
 
 // -------------------------------
@@ -331,5 +367,6 @@ pub fn async_map_test() {
   |> stream.async
   |> stream.map(int.multiply(_, 2))
   |> stream.to_list
+  |> process.receive_forever
   |> should.equal(Ok([2, 4, 6]))
 }

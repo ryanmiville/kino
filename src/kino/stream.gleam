@@ -182,15 +182,27 @@ pub fn fold(
   stream: Stream(element),
   from initial: acc,
   with f: fn(acc, element) -> acc,
-) -> Result(acc, StartError) {
-  use source <- result.try(start(stream))
-  use sub <- result.map(sink.start(source, initial, f))
-  process.receive_forever(sub)
+) -> Subject(Result(acc, StartError)) {
+  let receiver = process.new_subject()
+  process.start(linked: True, running: fn() {
+    start(stream)
+    |> result.try(sink.start(_, initial, f, receiver))
+    |> result.map_error(fn(error) { process.send(receiver, Error(error)) })
+  })
+  receiver
 }
 
-pub fn to_list(stream: Stream(element)) -> Result(List(element), StartError) {
+pub fn to_list(
+  stream: Stream(element),
+) -> Subject(Result(List(element), StartError)) {
   let f = fn(acc, x) { [x, ..acc] }
-  fold(stream, [], f) |> result.map(list.reverse)
+  let receiver = process.new_subject()
+  process.start(linked: True, running: fn() {
+    process.receive_forever(fold(stream, [], f))
+    |> result.map(list.reverse)
+    |> process.send(receiver, _)
+  })
+  receiver
 }
 
 fn start(stream: Stream(element)) -> Stage(element) {
@@ -511,10 +523,17 @@ pub fn try_fold(
   over stream: Stream(element),
   from initial: acc,
   with f: fn(acc, element) -> Result(acc, err),
-) -> Result(Result(acc, err), StartError) {
-  use source <- result.try(start(stream))
-  use sub <- result.map(try_fold.start(source, initial, f))
-  process.receive_forever(sub)
+) -> Subject(Result(Result(acc, err), StartError)) {
+  let receiver = process.new_subject()
+  process.start(linked: True, running: fn() {
+    start(stream)
+    |> result.try(try_fold.start(_, initial, f, receiver))
+    |> result.map_error(fn(error) { process.send(receiver, Error(error)) })
+  })
+  receiver
+  // use source <- result.try(start(stream))
+  // use sub <- result.map(try_fold.start(source, initial, f))
+  // process.receive_forever(sub)
 }
 
 pub fn emit(element: a, next: fn() -> Stream(a)) -> Stream(a) {
