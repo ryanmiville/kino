@@ -3,6 +3,7 @@ import gleam/function
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
 import gleam/result
+import gleam/string
 import kino/stream/internal/source
 
 type Starter(a) =
@@ -73,11 +74,17 @@ fn on_message(message: Message(a), flow: State(a)) {
       actor.Stop(Normal)
     }
     SourcePush(Some(stream)) -> {
-      // TODO
-      let assert Ok(source) = stream()
-      process.send(source, source.Pull(flow.as_sink))
-      State(..flow, current: Some(source))
-      |> actor.continue
+      case stream() {
+        Ok(source) -> {
+          process.send(source, source.Pull(flow.as_sink))
+          State(..flow, current: Some(source), waiting: False)
+          |> actor.continue
+        }
+        Error(error) -> {
+          process.send(flow.sink, None)
+          actor.Stop(process.Abnormal(string.inspect(error)))
+        }
+      }
     }
     Push(Some(element)) -> {
       process.send(flow.sink, Some(element))

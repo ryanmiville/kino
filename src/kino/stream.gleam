@@ -12,12 +12,12 @@ import kino/stream/internal/flow
 import kino/stream/internal/interleave
 import kino/stream/internal/intersperse
 import kino/stream/internal/sink
-import kino/stream/internal/source.{type Pull}
+import kino/stream/internal/source
 import kino/stream/internal/try_fold
 import kino/stream/internal/zip
 
 type Stage(element) =
-  Result(Subject(Pull(element)), StartError)
+  Result(Subject(source.Pull(element)), StartError)
 
 pub opaque type Stream(element) {
   Source(continuation: fn(Dynamic) -> Action(Dynamic, element))
