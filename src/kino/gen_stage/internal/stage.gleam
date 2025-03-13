@@ -9,8 +9,8 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
 import gleam/result
 import gleam/set.{type Set}
-import kino/internal/batch.{type Batch, type Demand, Batch, Demand}
-import kino/internal/buffer.{type Buffer, Take}
+import kino/gen_stage/internal/batch.{type Batch, type Demand, Batch, Demand}
+import kino/gen_stage/internal/buffer.{type Buffer, Take}
 import logging
 
 type ProducerMessage(event) {

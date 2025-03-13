@@ -1,5 +1,5 @@
 import gleam/otp/actor.{type StartError}
-import kino/internal/stage
+import kino/gen_stage/internal/stage
 
 pub type Producer(event) =
   stage.Producer(event)

@@ -1,7 +1,7 @@
 import gleam/erlang/process
 import gleam/otp/actor.{type StartError}
-import kino/internal/stage
-import kino/internal/subscription.{type Subscription}
+import kino/gen_stage/internal/stage
+import kino/gen_stage/internal/subscription.{type Subscription}
 
 pub type Consumer(event) =
   stage.Consumer(event)

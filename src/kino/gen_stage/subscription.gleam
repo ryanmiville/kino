@@ -1,8 +1,8 @@
 import gleam/option.{type Option, None, Some}
-import kino/consumer.{type Consumer}
-import kino/internal/stage
-import kino/processor.{type Processor}
-import kino/producer.{type Producer}
+import kino/gen_stage/consumer.{type Consumer}
+import kino/gen_stage/internal/stage
+import kino/gen_stage/processor.{type Processor}
+import kino/gen_stage/producer.{type Producer}
 
 pub opaque type Subscription(event) {
   Subscription(

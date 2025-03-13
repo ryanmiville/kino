@@ -1,7 +1,7 @@
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor.{type StartError}
-import kino/internal/stage
-import kino/internal/subscription.{type Subscription}
+import kino/gen_stage/internal/stage
+import kino/gen_stage/internal/subscription.{type Subscription}
 
 pub type Processor(in, out) =
   stage.Processor(in, out)

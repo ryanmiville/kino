@@ -1,5 +1,5 @@
 import gleeunit/should
-import kino/internal/buffer.{Take}
+import kino/gen_stage/internal/buffer.{Take}
 
 pub fn buffer_drops_events_when_at_capacity_test() {
   let buffer =
