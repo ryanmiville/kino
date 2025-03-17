@@ -381,12 +381,8 @@ pub fn async_map_unordered(
 
   let pool = pool.new(workers)
   stream
-  |> map(fn(element) {
-    let self = process.new_subject()
-    pool.send(pool, fn() { process.send(self, f(element)) })
-    self
-  })
-  |> map(fn(self) { process.receive_forever(self) })
+  |> map(fn(element) { pool.send(pool, fn() { f(element) }) })
+  |> map(process.receive_forever)
 }
 
 pub fn async_interleave(
