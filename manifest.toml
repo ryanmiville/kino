@@ -2,6 +2,7 @@
 # You typically do not need to edit this file
 
 packages = [
+  { name = "atomic_array", version = "1.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "atomic_array", source = "hex", outer_checksum = "2B5D25F975D6E9A222E62077AD8F5A30A932606BCBC6F2869C7961D19BD0D4CE" },
   { name = "gleam_deque", version = "1.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_deque", source = "hex", outer_checksum = "64D77068931338CF0D0CB5D37522C3E3CCA7CB7D6C5BACB41648B519CC0133C7" },
   { name = "gleam_erlang", version = "0.33.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleam_erlang", source = "hex", outer_checksum = "A1D26B80F01901B59AABEE3475DD4C18D27D58FA5C897D922FCB9B099749C064" },
   { name = "gleam_otp", version = "0.16.1", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_stdlib"], otp_app = "gleam_otp", source = "hex", outer_checksum = "50DA1539FC8E8FA09924EB36A67A2BBB0AD6B27BCDED5A7EF627057CF69D035E" },
@@ -12,6 +13,7 @@ packages = [
 ]
 
 [requirements]
+atomic_array = { version = ">= 1.0.0 and < 2.0.0" }
 gleam_deque = { version = ">= 1.0.0 and < 2.0.0" }
 gleam_erlang = { version = ">= 0.33.0 and < 1.0.0" }
 gleam_otp = { version = ">= 0.16.0 and < 1.0.0" }

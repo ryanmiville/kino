@@ -6,6 +6,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/order
 import gleam/otp/actor
 import gleam/otp/task.{type Task}
+import kino/pool
 
 pub opaque type Stream(element) {
   Stream(pull: fn() -> Option(#(element, Stream(element))))
@@ -377,7 +378,15 @@ pub fn async_map_unordered(
   f: fn(element) -> result,
 ) -> Stream(result) {
   use <- bool.lazy_guard(workers <= 1, fn() { map(stream, f) })
-  todo
+
+  let pool = pool.new(workers)
+  stream
+  |> map(fn(element) {
+    let self = process.new_subject()
+    pool.send(pool, fn() { process.send(self, f(element)) })
+    self
+  })
+  |> map(fn(self) { process.receive_forever(self) })
 }
 
 pub fn async_interleave(
@@ -547,7 +556,7 @@ pub fn chunk_within(
   todo
 }
 
-// Actor -----------------------------------------------------------------------
+// Actors ----------------------------------------------------------------------
 
 type Pull(element) {
   Pull(reply_to: Subject(Option(element)))
