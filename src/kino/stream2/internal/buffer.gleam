@@ -42,6 +42,7 @@ fn start(capacity: Option(Int)) {
 fn on_message(msg: Message(a), state: State(a)) {
   case msg {
     Push(value, reply_to) -> {
+      // echo value
       case do_push(state, value) {
         Ok(new_state) -> {
           process.send(reply_to, Ok(Nil))

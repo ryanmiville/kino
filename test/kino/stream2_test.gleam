@@ -1,3 +1,4 @@
+import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/otp/task
@@ -357,14 +358,25 @@ pub fn try_fold_test() {
   // |> stream.try_fold(0, fn(e, acc) { e + acc })
   // |> task.await_forever
 }
+
+pub fn buffer_test() {
+  stream.from_list([1, 2, 3])
+  |> stream.map(fn(i) { int.multiply(i, 2) })
+  |> stream.buffer(3)
+  |> stream.to_list
+  |> task.await(20)
+  |> should.equal([2, 4, 6])
+}
+
 // -------------------------------
 // Async Tests
 // -------------------------------
-// pub fn async_map_test() {
-//   stream.from_list([1, 2, 3])
-//   |> stream.async
-//   |> stream.map(int.multiply(_, 2))
-//   |> stream.to_list
-//   |> task.await_forever
-//   |> should.equal([2, 4, 6])
-// // }
+pub fn async_map_test() {
+  list.range(1, 10)
+  |> stream.from_list
+  |> stream.async_map(3, fn(i) { int.multiply(i, 2) })
+  |> stream.to_list
+  |> task.await_forever
+  |> list.sort(int.compare)
+  |> should.equal([2, 4, 6, 8, 10, 12, 14, 16, 18, 20])
+}

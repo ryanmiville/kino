@@ -1,20 +1,19 @@
 import gleam/deque.{type Deque}
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Pid, type Subject}
 import gleam/function
 import gleam/otp/actor
 
 pub opaque type Pool(a) {
-  Pool(self: Subject(Message(a)))
+  Pool(self: Subject(Message(a)), pid: Pid, owner: Subject(a))
 }
 
-pub fn new(max_size: Int) {
-  Pool(start_pool(max_size))
+pub fn new(max_size: Int, worker: actor.Spec(state, msg)) {
+  let owner = process.new_subject()
+  Pool(start_pool(max_size, worker), process.self(), owner)
 }
 
-pub fn send(pool: Pool(a), f: fn() -> a) -> Subject(a) {
-  let subject = process.new_subject()
-  process.send(pool.self, Send(f, subject))
-  subject
+pub fn send(pool: Pool(a), message: a) -> Nil {
+  process.send(pool.self, Send(message))
 }
 
 pub fn stop(pool: Pool(a)) -> Nil {
@@ -22,28 +21,39 @@ pub fn stop(pool: Pool(a)) -> Nil {
 }
 
 type Message(a) {
-  Available(Subject(WorkerMessage(a)))
-  Send(fn() -> a, Subject(a))
+  Available(Subject(a))
+  Send(a)
   Stop
 }
 
 type State(a) {
   State(
     self: Subject(Message(a)),
+    start_worker: fn() -> Subject(a),
     max_size: Int,
     count: Int,
-    available: List(Subject(WorkerMessage(a))),
-    queue: Deque(WorkerMessage(a)),
+    available: List(Subject(a)),
+    queue: Deque(a),
   )
 }
 
-fn start_pool(max_size: Int) {
+fn start_pool(max_size: Int, spec: actor.Spec(state, msg)) {
   let init = fn() {
     let self = process.new_subject()
     let sel =
       process.new_selector()
       |> process.selecting(self, function.identity)
-    State(self:, max_size:, count: 0, available: [], queue: deque.new())
+
+    let start_worker = fn() { new_worker(self, spec) }
+
+    State(
+      self:,
+      start_worker:,
+      max_size:,
+      count: 0,
+      available: [],
+      queue: deque.new(),
+    )
     |> actor.Ready(sel)
   }
   let assert Ok(pool) = actor.start_spec(actor.Spec(init, 1000, on_message))
@@ -64,59 +74,65 @@ fn on_message(msg: Message(a), state: State(a)) {
         }
       }
     }
-    Send(f, reply_to) -> {
+    Send(msg) -> {
       case state.available {
         [worker, ..rest] -> {
-          process.send(worker, WorkerMessage(f, reply_to))
+          process.send(worker, msg)
           State(..state, available: rest) |> actor.continue
         }
         [] if state.count < state.max_size -> {
-          let worker = new_worker(state.self)
-          process.send(worker, WorkerMessage(f, reply_to))
+          let worker = state.start_worker()
+          process.send(worker, msg)
           State(..state, count: state.count + 1) |> actor.continue
         }
         [] -> {
-          let queue = deque.push_back(state.queue, WorkerMessage(f, reply_to))
+          let queue = deque.push_back(state.queue, msg)
           State(..state, queue:) |> actor.continue
         }
       }
     }
-    // Await(reply_to) if state.available_count == state.count -> {
-    //   todo
-    // }
-    // Await(_reply_to) -> {
-    //   process.send(state.self, msg)
-    //   actor.continue(state)
-    // }
     Stop -> {
       actor.Stop(process.Normal)
     }
   }
 }
 
-fn new_worker(pool) -> Subject(WorkerMessage(a)) {
+fn new_worker(
+  pool: Subject(Message(msg)),
+  spec: actor.Spec(state, msg),
+) -> Subject(msg) {
   let init = fn() {
-    let self = process.new_subject()
-    let sel =
-      process.new_selector()
-      |> process.selecting(self, function.identity)
-    actor.Ready(Worker(self, pool), sel)
+    case spec.init() {
+      actor.Failed(err) -> actor.Failed(err)
+      actor.Ready(state, selector) -> {
+        let self = process.new_subject()
+        let selector = process.selecting(selector, self, function.identity)
+        Worker(self:, pool:, on_message: spec.loop, state:)
+        |> actor.Ready(selector)
+      }
+    }
   }
   let assert Ok(worker) =
-    actor.start_spec(actor.Spec(init, 1000, worker_on_message))
+    actor.start_spec(actor.Spec(init, spec.init_timeout, worker_on_message))
   worker
 }
 
-type Worker(a) {
-  Worker(self: Subject(WorkerMessage(a)), pool: Subject(Message(a)))
+type Worker(msg, state) {
+  Worker(
+    self: Subject(msg),
+    pool: Subject(Message(msg)),
+    on_message: fn(msg, state) -> actor.Next(msg, state),
+    state: state,
+  )
 }
 
-type WorkerMessage(a) {
-  WorkerMessage(f: fn() -> a, reply_to: Subject(a))
-}
-
-fn worker_on_message(msg: WorkerMessage(a), worker: Worker(a)) {
-  process.send(msg.reply_to, msg.f())
-  process.send(worker.pool, Available(worker.self))
-  actor.continue(worker)
+fn worker_on_message(message: message, worker: Worker(message, state)) {
+  case worker.on_message(message, worker.state) {
+    actor.Continue(new_state, sel) -> {
+      process.send(worker.pool, Available(worker.self))
+      let worker = Worker(..worker, state: new_state)
+      actor.Continue(worker, sel)
+    }
+    actor.Stop(reason) -> actor.Stop(reason)
+  }
 }

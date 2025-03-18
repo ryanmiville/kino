@@ -1,12 +1,16 @@
 import gleam/bool
 import gleam/erlang/process.{type Subject, Normal}
+import gleam/function
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/order
 import gleam/otp/actor
 import gleam/otp/task.{type Task}
-import kino/pool
+import gleam/result
+import kino/lg
+import kino/pool.{type Pool}
+import kino/stream2/internal/buffer.{type Buffer, AtCapacity}
 
 pub opaque type Stream(element) {
   Stream(pull: fn() -> Option(#(element, Stream(element))))
@@ -129,6 +133,11 @@ pub fn to_list(stream: Stream(element)) -> Task(List(element)) {
   let f = fn(acc, x) { [x, ..acc] }
   use <- task.async
   do_fold(stream, [], f) |> list.reverse
+}
+
+pub fn run(stream: Stream(element)) -> Task(Nil) {
+  use <- task.async
+  do_fold(stream, Nil, fn(_, _) { Nil })
 }
 
 // fn start(stream: Stream(element)) -> Stage(element) {
@@ -355,9 +364,63 @@ pub fn prepend(stream: Stream(a), element: a) -> Stream(a) {
 }
 
 pub fn drain(stream: Stream(a)) -> Stream(nothing) {
+  use <- Stream
+  do_drain(stream)
+}
+
+fn do_drain(stream: Stream(a)) -> Option(nothing) {
   case stream.pull() {
-    None -> empty()
-    Some(#(_, next)) -> drain(next)
+    None -> None
+    Some(#(_, next)) -> do_drain(next)
+  }
+}
+
+pub fn buffer(stream: Stream(a), size: Int) -> Stream(a) {
+  use <- Stream
+  let buffer = buffer.new(Some(size))
+  process.start(linked: True, running: fn() { do_buffer(stream, buffer) |> run })
+  pull_from_buffer(buffer).pull()
+}
+
+fn do_buffer(stream: Stream(a), buffer: Buffer(Option(a))) -> Stream(a) {
+  use <- Stream
+  case stream.pull() {
+    Some(#(element, next)) -> {
+      case buffer.push(buffer, Some(element)) {
+        Ok(Nil) -> do_buffer(next, buffer).pull()
+        Error(AtCapacity) -> {
+          let stream = Stream(fn() { Some(#(element, next)) })
+          do_buffer(stream, buffer).pull()
+        }
+      }
+    }
+    // we need to tell downstream that we're done. So push None into the buffer
+    None -> {
+      case buffer.push(buffer, None) {
+        Ok(Nil) -> {
+          None
+        }
+        Error(AtCapacity) -> {
+          let stream = Stream(fn() { None })
+          do_buffer(stream, buffer).pull()
+        }
+      }
+    }
+  }
+}
+
+fn pull_from_buffer(buffer: Buffer(Option(a))) -> Stream(a) {
+  use <- Stream
+  case buffer.pop(buffer) {
+    Ok(Some(element)) -> {
+      Some(#(element, pull_from_buffer(buffer)))
+    }
+    Ok(None) -> {
+      None
+    }
+    Error(Nil) -> {
+      pull_from_buffer(buffer).pull()
+    }
   }
 }
 
@@ -369,20 +432,41 @@ pub fn async_map(
   f: fn(element) -> result,
 ) -> Stream(result) {
   use <- bool.lazy_guard(workers <= 1, fn() { map(stream, f) })
-  todo
+  use <- Stream
+  let assert Ok(stream) = start_stream(stream)
+  let subject = process.new_subject()
+  let assert Ok(pool) = lg.new(workers, map_worker(stream, subject, f))
+  let pull = fn() { lg.send(pool, FromSink(Pull(subject))) }
+  list.repeat(0, workers)
+  |> list.each(fn(_) { pull() })
+  do_async_map(subject, workers, 0, pull, pool)
 }
 
-pub fn async_map_unordered(
-  stream: Stream(element),
+// todo mapper should accept pull from here
+fn do_async_map(
+  subject: Subject(Option(element)),
   workers: Int,
-  f: fn(element) -> result,
-) -> Stream(result) {
-  use <- bool.lazy_guard(workers <= 1, fn() { map(stream, f) })
+  completed: Int,
+  pull,
+  pool,
+) -> Option(#(element, Stream(element))) {
+  use <- bool.lazy_guard(completed == workers, fn() {
+    lg.shutdown(pool)
+    None
+  })
 
-  let pool = pool.new(workers)
-  stream
-  |> map(fn(element) { pool.send(pool, fn() { f(element) }) })
-  |> map(process.receive_forever)
+  case process.receive_forever(subject) {
+    Some(element) -> {
+      pull()
+      Some(#(
+        element,
+        Stream(fn() { do_async_map(subject, workers, completed, pull, pool) }),
+      ))
+    }
+    None -> {
+      do_async_map(subject, workers, completed + 1, pull, pool)
+    }
+  }
 }
 
 pub fn async_interleave(
@@ -575,7 +659,80 @@ fn on_message(
     }
     None -> {
       process.send(msg.reply_to, None)
-      actor.Stop(Normal)
+      actor.continue(Stream(fn() { None }))
+    }
+  }
+}
+
+type Map(a, b) {
+  Map(
+    source: Subject(Pull(a)),
+    as_sink: Subject(Option(a)),
+    reply_to: Subject(Option(b)),
+    f: fn(a) -> b,
+  )
+}
+
+type MapMessage(a, b) {
+  FromSource(Option(a))
+  FromSink(Pull(b))
+}
+
+// fn start_map(
+//   source: Subject(Pull(a)),
+//   reply_to: Subject(Option(b)),
+//   f: fn(a) -> b,
+// ) -> Result(Subject(Pull(b)), actor.StartError) {
+//   let sub = process.new_subject()
+//   let init = fn() {
+//     let as_sink = process.new_subject()
+//     let as_source = process.new_subject()
+//     let sel =
+//       process.new_selector()
+//       |> process.selecting(as_sink, FromSource)
+//       |> process.selecting(as_source, FromSink)
+
+//     process.send(source, Pull(as_sink))
+
+//     process.send(sub, as_source)
+//     Map(f:, as_sink:, as_source:, source:, reply_to:)
+//     |> actor.Ready(sel)
+//   }
+//   actor.start_spec(actor.Spec(init, 1000, on_map))
+//   |> result.replace(process.receive_forever(sub))
+// }
+
+fn map_worker(
+  source: Subject(Pull(a)),
+  reply_to: Subject(Option(b)),
+  f: fn(a) -> b,
+) {
+  let init = fn(selector) {
+    let as_sink = process.new_subject()
+    let sel =
+      selector
+      |> process.selecting(as_sink, FromSource)
+
+    Map(f:, as_sink:, source:, reply_to:)
+    |> actor.Ready(sel)
+  }
+
+  lg.worker(init, 1000, on_map)
+}
+
+fn on_map(msg: MapMessage(a, b), state: Map(a, b)) {
+  case msg {
+    FromSource(Some(element)) -> {
+      process.send(state.reply_to, Some(state.f(element)))
+      actor.continue(state)
+    }
+    FromSource(None) -> {
+      process.send(state.reply_to, None)
+      actor.continue(state)
+    }
+    FromSink(_) -> {
+      process.send(state.source, Pull(state.as_sink))
+      actor.continue(state)
     }
   }
 }
