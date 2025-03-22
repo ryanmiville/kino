@@ -442,7 +442,6 @@ pub fn async_map(
   do_async_map(subject, workers, 0, pull, pool)
 }
 
-// todo mapper should accept pull from here
 fn do_async_map(
   subject: Subject(Option(element)),
   workers: Int,
@@ -457,10 +456,12 @@ fn do_async_map(
 
   case process.receive_forever(subject) {
     Some(element) -> {
-      pull()
       Some(#(
         element,
-        Stream(fn() { do_async_map(subject, workers, completed, pull, pool) }),
+        Stream(fn() {
+          pull()
+          do_async_map(subject, workers, completed, pull, pool)
+        }),
       ))
     }
     None -> {
@@ -473,7 +474,56 @@ pub fn async_interleave(
   left: Stream(element),
   with right: Stream(element),
 ) -> Stream(element) {
-  todo
+  use <- Stream
+  let assert Ok(left) = start_stream(left)
+  let assert Ok(right) = start_stream(right)
+
+  let left_sub = process.new_subject()
+  let right_sub = process.new_subject()
+
+  let pull_left = fn() { process.send(left, Pull(left_sub)) }
+  let pull_right = fn() { process.send(right, Pull(right_sub)) }
+  pull_left()
+  pull_right()
+  do_async_interleave(left_sub, right_sub, pull_left, pull_right)
+}
+
+fn do_async_interleave(
+  left: Subject(Option(e)),
+  right: Subject(Option(e)),
+  pull_left: fn() -> Nil,
+  pull_right: fn() -> Nil,
+) -> Option(#(e, Stream(e))) {
+  case process.receive_forever(left) {
+    None -> continue_one(pull_right, right)
+    Some(element) -> {
+      Some(#(
+        element,
+        Stream(fn() {
+          pull_left()
+          do_async_interleave(right, left, pull_right, pull_left)
+        }),
+      ))
+    }
+  }
+}
+
+fn continue_one(
+  pull: fn() -> Nil,
+  sink: Subject(Option(element)),
+) -> Option(#(element, Stream(element))) {
+  case process.receive_forever(sink) {
+    None -> None
+    Some(element) -> {
+      Some(#(
+        element,
+        Stream(fn() {
+          pull()
+          continue_one(pull, sink)
+        }),
+      ))
+    }
+  }
 }
 
 type Zip(l, r) {
@@ -508,10 +558,12 @@ fn do_zip(
 ) -> Option(#(#(l, r), Stream(#(l, r)))) {
   case left, right {
     Some(left), Some(right) -> {
-      pull()
       Some(#(
         #(left, right),
-        Stream(fn() { do_zip(selector, None, None, pull) }),
+        Stream(fn() {
+          pull()
+          do_zip(selector, None, None, pull)
+        }),
       ))
     }
     _, _ -> {
@@ -538,8 +590,16 @@ pub fn async_concat(
   max_open: Int,
 ) -> Stream(element) {
   use <- bool.lazy_guard(max_open <= 1, fn() { concat(streams) })
+  use <- Stream
 
-  todo
+  let source = from_list(streams)
+  let assert Ok(source) = start_stream(source)
+  let subject = process.new_subject()
+  let assert Ok(pool) = lg.new(max_open, concat_worker(source, subject))
+  let pull = fn() { lg.send(pool, ConcatFromSink(Pull(subject))) }
+  list.repeat(0, max_open)
+  |> list.each(fn(_) { pull() })
+  do_async_map(subject, max_open, 0, pull, pool)
 }
 
 pub fn async_flatten(stream: Stream(Stream(a)), max_open: Int) -> Stream(a) {
@@ -668,6 +728,7 @@ type Map(a, b) {
   Map(
     source: Subject(Pull(a)),
     as_sink: Subject(Option(a)),
+    as_source: Subject(Pull(b)),
     reply_to: Subject(Option(b)),
     f: fn(a) -> b,
   )
@@ -706,14 +767,18 @@ fn map_worker(
   source: Subject(Pull(a)),
   reply_to: Subject(Option(b)),
   f: fn(a) -> b,
-) {
+) -> lg.WorkerSpec(Map(a, b), MapMessage(a, b)) {
+  let sub = process.new_subject()
   let init = fn(selector) {
     let as_sink = process.new_subject()
+    let as_source = process.new_subject()
     let sel =
       selector
       |> process.selecting(as_sink, FromSource)
+      |> process.selecting(as_source, FromSink)
 
-    Map(f:, as_sink:, source:, reply_to:)
+    process.send(sub, as_source)
+    Map(f:, as_sink:, as_source:, source:, reply_to:)
     |> actor.Ready(sel)
   }
 
@@ -736,3 +801,222 @@ fn on_map(msg: MapMessage(a, b), state: Map(a, b)) {
     }
   }
 }
+
+type ConcatMessage(a) {
+  ConcatFromSink(Pull(a))
+  ConcatFromSource(Option(Stream(a)))
+}
+
+type Concat(a) {
+  Concat(
+    stream: Stream(a),
+    as_sink: Subject(Option(Stream(a))),
+    source: Subject(Pull(Stream(a))),
+    reply_to: Subject(Option(a)),
+  )
+}
+
+fn concat_worker(
+  source: Subject(Pull(Stream(a))),
+  reply_to: Subject(Option(a)),
+) -> lg.WorkerSpec(Concat(a), ConcatMessage(a)) {
+  let init = fn(selector) {
+    let as_sink = process.new_subject()
+    let sel =
+      selector
+      |> process.selecting(as_sink, ConcatFromSource)
+
+    Concat(stream: empty(), as_sink:, source:, reply_to:)
+    |> actor.Ready(sel)
+  }
+
+  lg.worker(init, 1000, on_concat_message)
+}
+
+fn on_concat_message(msg: ConcatMessage(a), state: Concat(a)) {
+  case msg {
+    ConcatFromSink(Pull(_)) -> {
+      case state.stream.pull() {
+        Some(#(e, next)) -> {
+          process.send(state.reply_to, Some(e))
+          actor.continue(Concat(..state, stream: next))
+        }
+        None -> {
+          process.send(state.source, Pull(state.as_sink))
+          actor.continue(state)
+        }
+      }
+    }
+    ConcatFromSource(Some(stream)) -> {
+      let state = Concat(..state, stream: stream)
+      on_concat_message(ConcatFromSink(Pull(state.reply_to)), state)
+    }
+    ConcatFromSource(None) -> {
+      process.send(state.reply_to, None)
+      actor.continue(state)
+    }
+  }
+}
+// type ConcatMsg(element) {
+//   StartStreams
+//   StreamDone
+//   StreamValue(element)
+// }
+
+// type ConcatState(
+//   element,
+//   // Remaining streams to process
+//   // Currently active streams
+//   // Max open streams
+//   // Stream manager process
+//   // Results subject
+// ) =
+//   #(
+//     List(Stream(element)),
+//     Int,
+//     Int,
+//     Subject(ConcatMsg(element)),
+//     Subject(Option(element)),
+//   )
+
+// fn handle_concat_message(
+//   msg: ConcatMsg(element),
+//   state: ConcatState(element),
+// ) -> actor.Next(ConcatMsg(element), ConcatState(element)) {
+//   let #(streams, active, max_open, streams_pid, results_pid) = state
+
+//   case msg {
+//     StartStreams -> {
+//       // Start streams up to max_open
+//       let streams_to_start = max_open - active
+
+//       case streams_to_start <= 0 {
+//         True -> actor.continue(state)
+//         False -> {
+//           let #(to_start, remaining) = list.split(streams, streams_to_start)
+
+//           // Start each stream
+//           list.each(to_start, fn(stream) {
+//             task.async(fn() {
+//               do_process_stream(stream, streams_pid, results_pid)
+//             })
+//           })
+
+//           actor.continue(#(
+//             remaining,
+//             active + list.length(to_start),
+//             max_open,
+//             streams_pid,
+//             results_pid,
+//           ))
+//         }
+//       }
+//     }
+
+//     StreamDone -> {
+//       // A stream is done, update active count and maybe start more
+//       let new_active = active - 1
+
+//       case streams, new_active < max_open {
+//         [], _ -> {
+//           // No more streams to process, check if we're done
+//           case new_active == 0 {
+//             True -> {
+//               // All streams are done, send None to signify completion
+//               process.send(results_pid, None)
+//               actor.Stop(Normal)
+//             }
+//             False ->
+//               actor.continue(#(
+//                 streams,
+//                 new_active,
+//                 max_open,
+//                 streams_pid,
+//                 results_pid,
+//               ))
+//           }
+//         }
+
+//         _, True -> {
+//           // Start one more stream
+//           let #(to_start, remaining) = list.split(streams, 1)
+
+//           case to_start {
+//             [stream] -> {
+//               task.async(fn() {
+//                 do_process_stream(stream, streams_pid, results_pid)
+//               })
+
+//               actor.continue(#(
+//                 remaining,
+//                 new_active + 1,
+//                 max_open,
+//                 streams_pid,
+//                 results_pid,
+//               ))
+//             }
+//             _ ->
+//               actor.continue(#(
+//                 streams,
+//                 new_active,
+//                 max_open,
+//                 streams_pid,
+//                 results_pid,
+//               ))
+//           }
+//         }
+
+//         _, False ->
+//           actor.continue(#(
+//             streams,
+//             new_active,
+//             max_open,
+//             streams_pid,
+//             results_pid,
+//           ))
+//       }
+//     }
+
+//     StreamValue(value) -> {
+//       // Forward the value to results
+//       process.send(results_pid, Some(value))
+//       actor.continue(state)
+//     }
+//   }
+// }
+
+// fn do_process_stream(
+//   stream: Stream(element),
+//   streams_pid: Subject(ConcatMsg(element)),
+//   results_pid: Subject(Option(element)),
+// ) -> Nil {
+//   case stream.pull() {
+//     Some(#(value, next)) -> {
+//       // Send the value through the manager
+//       process.send(streams_pid, StreamValue(value))
+
+//       // Continue processing this stream
+//       do_process_stream(next, streams_pid, results_pid)
+//     }
+
+//     None -> {
+//       // This stream is done
+//       process.send(streams_pid, StreamDone)
+//     }
+//   }
+// }
+
+// fn pull_concat_results(
+//   results_pid: Subject(Option(element)),
+//   streams_pid: Subject(ConcatMsg(element)),
+// ) -> Option(#(element, Stream(element))) {
+//   case process.receive_forever(results_pid) {
+//     Some(value) -> {
+//       Some(#(
+//         value,
+//         Stream(fn() { pull_concat_results(results_pid, streams_pid) }),
+//       ))
+//     }
+//     None -> None
+//   }
+// }
