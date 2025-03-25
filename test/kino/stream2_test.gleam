@@ -407,42 +407,43 @@ pub fn async_concat_test() {
   |> list.sort(int.compare)
   |> should.equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
   // Also test with empty streams in the mix
-  // let mixed_streams = [
-  //   stream.from_list([1, 2]),
-  //   stream.empty(),
-  //   stream.from_list([3, 4]),
-  //   stream.empty(),
-  //   stream.from_list([5, 6]),
-  // ]
+  let mixed_streams = [
+    stream.from_list([1, 2]),
+    stream.empty(),
+    stream.from_list([3, 4]),
+    stream.empty(),
+    stream.from_list([5, 6]),
+  ]
 
-  // mixed_streams
-  // |> stream.async_concat(3)
-  // |> stream.to_list
-  // |> task.await_forever
-  // |> should.equal([1, 2, 3, 4, 5, 6])
+  mixed_streams
+  |> stream.async_concat(3)
+  |> stream.to_list
+  |> task.await_forever
+  |> list.sort(int.compare)
+  |> should.equal([1, 2, 3, 4, 5, 6])
 
-  // // Test with empty list
-  // []
-  // |> stream.async_concat(2)
-  // |> stream.to_list
-  // |> task.await_forever
-  // |> should.equal([])
+  // Test with empty list
+  []
+  |> stream.async_concat(2)
+  |> stream.to_list
+  |> task.await_forever
+  |> should.equal([])
 
-  // // Test with single stream
-  // [stream.from_list([1, 2, 3])]
-  // |> stream.async_concat(2)
-  // |> stream.to_list
-  // |> task.await_forever
-  // |> should.equal([1, 2, 3])
-
-  // // Test with a large number of streams
-  // list.range(1, 10)
-  // |> list.map(fn(i) { stream.from_list([i * 10, i * 10 + 1]) })
-  // |> stream.async_concat(3)
-  // |> stream.to_list
-  // |> task.await_forever
-  // |> should.equal([
-  //   10, 11, 20, 21, 30, 31, 40, 41, 50, 51, 60, 61, 70, 71, 80, 81, 90, 91, 100,
-  //   101,
-  // ])
+  // Test with single stream
+  [stream.from_list([1, 2, 3])]
+  |> stream.async_concat(2)
+  |> stream.to_list
+  |> task.await_forever
+  |> should.equal([1, 2, 3])
+  // Test with a large number of streams
+  list.range(1, 10)
+  |> list.map(fn(i) { stream.from_list([i * 10, i * 10 + 1]) })
+  |> stream.async_concat(3)
+  |> stream.to_list
+  |> task.await_forever
+  |> list.sort(int.compare)
+  |> should.equal([
+    10, 11, 20, 21, 30, 31, 40, 41, 50, 51, 60, 61, 70, 71, 80, 81, 90, 91, 100,
+    101,
+  ])
 }
