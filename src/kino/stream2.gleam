@@ -442,6 +442,77 @@ pub fn async_map(
   do_async_map(subject, workers, 0, pull, pool)
 }
 
+pub fn par_map(
+  stream: Stream(element),
+  workers: Int,
+  f: fn(element) -> result,
+) -> Stream(result) {
+  use <- Stream
+  let assert Ok(stream) = start_stream(stream)
+  let pool = pool.new(workers)
+  let subject = process.new_subject()
+  let pull = fn() {
+    case process.try_call_forever(stream, Pull) {
+      Ok(Some(value)) -> {
+        process.send(subject, Some(f(value)))
+      }
+      _ -> {
+        process.send(subject, None)
+      }
+    }
+  }
+  let pull = fn() { pool.spawn(pool, pull) }
+  repeat_apply(workers, pull)
+  par_map_loop(subject, pool, pull)
+}
+
+fn repeat_apply(times: Int, f: fn() -> anything) -> Nil {
+  case times {
+    _ if times < 1 -> Nil
+    1 -> f() |> to_nil
+    _ -> {
+      f()
+      repeat_apply(times - 1, f)
+    }
+  }
+}
+
+fn to_nil(_) -> Nil {
+  Nil
+}
+
+fn par_map_loop(subject, pool, pull) {
+  case process.receive_forever(subject) {
+    Some(element) -> {
+      Some(#(
+        element,
+        Stream(fn() {
+          pull()
+          par_map_loop(subject, pool, pull)
+        }),
+      ))
+    }
+    None -> {
+      pool.wait_forever(pool)
+      drain_subject(subject)
+    }
+  }
+}
+
+fn drain_subject(subject) {
+  case process.receive(subject, 0) {
+    Ok(Some(element)) -> {
+      Some(#(element, Stream(fn() { drain_subject(subject) })))
+    }
+    Ok(None) -> {
+      drain_subject(subject)
+    }
+    Error(Nil) -> {
+      None
+    }
+  }
+}
+
 fn do_async_map(
   subject: Subject(Option(element)),
   workers: Int,

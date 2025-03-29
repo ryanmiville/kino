@@ -22,11 +22,17 @@ pub fn with_capacity(capacity: Int) -> Channel(a) {
 }
 
 pub fn send(channel: Channel(a), value: a) {
-  process.call_forever(channel.subject, Send(_, value))
+  case process.try_call_forever(channel.subject, Send(_, value)) {
+    Ok(Error(Closed)) | Error(_) -> Error(Closed)
+    Ok(value) -> value
+  }
 }
 
 pub fn receive(channel: Channel(a)) {
-  process.call_forever(channel.subject, Receive)
+  case process.try_call_forever(channel.subject, Receive) {
+    Ok(value) -> value
+    Error(_) -> Error(Closed)
+  }
 }
 
 pub fn close(channel: Channel(a)) {
@@ -120,40 +126,63 @@ fn start(capacity: Option(Int)) {
   actor.start_spec(Spec(init, 1000, on_message))
 }
 
-fn on_message(msg: Msg(a), state: State(a)) {
-  case msg {
-    Dispatch if state.closed -> {
-      close_receivers(state.receivers)
-      close_senders(state.senders)
-      actor.Stop(Normal)
-    }
+fn on_message(msg: Msg(a), state: State(a)) -> actor.Next(Msg(a), State(a)) {
+  case state.closed {
+    False -> on_open(msg, state)
+    True -> on_closed(msg, state)
+  }
+}
 
+fn on_open(msg: Msg(a), state: State(a)) {
+  case msg {
     Dispatch -> {
       dispatch(state) |> actor.continue
     }
-    Send(_, _) if state.closed -> {
-      panic as "sent to a closed channel"
-    }
+
     Send(reply_to, value) -> {
       case push(state.buffer, value) {
         Ok(buffer) -> {
           process.send(reply_to, Ok(Nil))
-          on_message(Dispatch, State(..state, buffer:))
+          on_open(Dispatch, State(..state, buffer:))
         }
         Error(Nil) -> {
           let senders = deque.push_back(state.senders, #(reply_to, value))
-          on_message(Dispatch, State(..state, senders:))
+          on_open(Dispatch, State(..state, senders:))
         }
       }
     }
 
     Receive(reply_to) -> {
       let receivers = deque.push_back(state.receivers, reply_to)
-      on_message(Dispatch, State(..state, receivers:))
+      on_open(Dispatch, State(..state, receivers:))
     }
 
     Close -> {
-      on_message(Dispatch, State(..state, closed: True))
+      let senders = close_senders(state.senders)
+      on_closed(Dispatch, State(..state, closed: True, senders:))
+    }
+  }
+}
+
+fn on_closed(msg: Msg(a), state: State(a)) {
+  case msg {
+    Close -> actor.continue(state)
+    Dispatch if state.buffer.counter == 0 -> {
+      close_receivers(state.receivers)
+      actor.Stop(Normal)
+    }
+    Dispatch -> {
+      let #(receivers, buffer) =
+        dispatch_receivers(state.receivers, state.buffer)
+      actor.continue(State(..state, receivers:, buffer:))
+    }
+    Receive(reply) -> {
+      let receivers = deque.push_back(state.receivers, reply)
+      on_closed(Dispatch, State(..state, receivers:))
+    }
+    Send(reply, _) -> {
+      process.send(reply, Error(Closed))
+      actor.continue(state)
     }
   }
 }
@@ -216,7 +245,7 @@ fn dispatch_senders(
 }
 
 // BUFFER --------------------------------------------------------------------------------
-pub type Buffer(a) {
+type Buffer(a) {
   Buffer(queue: Deque(a), counter: Int, capacity: Option(Int))
 }
 

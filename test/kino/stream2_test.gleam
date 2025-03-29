@@ -381,6 +381,16 @@ pub fn async_map_test() {
   |> should.equal([2, 4, 6, 8, 10, 12, 14, 16, 18, 20])
 }
 
+pub fn par_map_test() {
+  list.range(1, 10)
+  |> stream.from_list
+  |> stream.par_map(3, fn(i) { int.multiply(i, 2) })
+  |> stream.to_list
+  |> task.await_forever
+  |> list.sort(int.compare)
+  |> should.equal([2, 4, 6, 8, 10, 12, 14, 16, 18, 20])
+}
+
 pub fn async_interleave_test() {
   [1, 3, 5, 7, 9, 11]
   |> stream.from_list

@@ -65,16 +65,17 @@ pub fn buffered_test() {
   channel.receive(channel)
   |> should.equal(Ok(1))
 }
-// pub fn fold_test() {
-//   let channel = channel.new()
-//   let f = fn() {
-//     let _ = channel.send(channel, 1)
-//     let _ = channel.send(channel, 2)
-//     let _ = channel.send(channel, 3)
-//     channel.close(channel)
-//   }
-//   process.start(f, True)
 
-//   channel.fold(channel, 0, fn(acc, value) { acc + value })
-//   |> should.equal(6)
-// }
+pub fn fold_test() {
+  let channel = channel.new()
+  let f = fn() {
+    let _ = channel.send(channel, 1)
+    let _ = channel.send(channel, 2)
+    let _ = channel.send(channel, 3)
+    channel.close(channel)
+  }
+  process.start(f, True)
+
+  channel.fold(channel, 0, fn(acc, value) { acc + value })
+  |> should.equal(6)
+}
