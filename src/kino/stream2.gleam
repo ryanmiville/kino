@@ -8,6 +8,7 @@ import gleam/order
 import gleam/otp/actor
 import gleam/otp/task.{type Task}
 import gleam/result
+import kino/channel
 import kino/lg
 import kino/pool.{type Pool}
 import kino/stream2/internal/buffer.{type Buffer, AtCapacity}
@@ -447,6 +448,7 @@ pub fn par_map(
   workers: Int,
   f: fn(element) -> result,
 ) -> Stream(result) {
+  use <- bool.lazy_guard(workers <= 1, fn() { map(stream, f) })
   use <- Stream
   let assert Ok(stream) = start_stream(stream)
   let pool = pool.new(workers)
@@ -673,6 +675,87 @@ pub fn async_concat(
   do_async_map(subject, max_open, 0, pull, pool)
 }
 
+pub fn par_concat(
+  streams: List(Stream(element)),
+  max_open: Int,
+) -> Stream(element) {
+  use <- bool.guard(streams == [], empty())
+  use <- bool.lazy_guard(max_open <= 1, fn() { concat(streams) })
+  use <- Stream
+  let pool = pool.new(max_open)
+  let subject = process.new_subject()
+  let #(starts, rest) = list.split(streams, max_open)
+  let assert Ok(source) = from_list(rest) |> start_stream
+  let chan = channel.with_capacity(max_open)
+
+  list.each(starts, fn(s) {
+    pool.spawn(pool, fn() { par_concat_worker_loop(subject, chan, source, s) })
+  })
+
+  let pull = fn() { channel.send(chan, "") }
+  repeat_apply(max_open, pull)
+  par_concat_loop(subject, chan, pool, pull)
+}
+
+fn par_concat_loop(subject, chan, pool, pull) {
+  case process.receive_forever(subject) {
+    Some(element) -> {
+      Some(#(
+        element,
+        Stream(fn() {
+          pull()
+          par_concat_loop(subject, chan, pool, pull)
+        }),
+      ))
+    }
+    None -> {
+      channel.close(chan)
+      pool.wait_forever(pool)
+      drain_subject(subject)
+    }
+  }
+}
+
+fn par_concat_worker_loop(
+  subject: Subject(Option(a)),
+  chan: channel.Channel(f),
+  source: Subject(Pull(Stream(a))),
+  stream: Stream(a),
+) -> Nil {
+  case channel.receive(chan) {
+    Ok(_) -> {
+      par_concat_pull(subject, chan, source, stream)
+    }
+    Error(channel.Closed) -> {
+      Nil
+    }
+  }
+}
+
+fn par_concat_pull(
+  subject: Subject(Option(a)),
+  chan: channel.Channel(f),
+  source: Subject(Pull(Stream(a))),
+  stream: Stream(a),
+) -> Nil {
+  case stream.pull() {
+    Some(#(e, next)) -> {
+      process.send(subject, Some(e))
+      par_concat_worker_loop(subject, chan, source, next)
+    }
+    None -> {
+      case process.try_call_forever(source, Pull) {
+        Ok(Some(stream)) -> {
+          par_concat_pull(subject, chan, source, stream)
+        }
+        _ -> {
+          process.send(subject, None)
+        }
+      }
+    }
+  }
+}
+
 pub fn async_flatten(stream: Stream(Stream(a)), max_open: Int) -> Stream(a) {
   use <- bool.lazy_guard(max_open <= 1, fn() { flatten(stream) })
   todo
@@ -885,6 +968,29 @@ type Concat(a) {
     source: Subject(Pull(Stream(a))),
     reply_to: Subject(Option(a)),
   )
+}
+
+fn start_concat(
+  source: Subject(Pull(Stream(a))),
+  stream: Stream(a),
+  reply_to: Subject(Option(a)),
+) -> Result(Subject(Pull(a)), actor.StartError) {
+  let self = process.new_subject()
+  let init = fn() {
+    let as_sink = process.new_subject()
+    let as_source = process.new_subject()
+    let sel =
+      process.new_selector()
+      |> process.selecting(as_sink, ConcatFromSource)
+      |> process.selecting(as_source, ConcatFromSink)
+
+    process.send(self, as_source)
+    Concat(stream:, as_sink:, source:, reply_to:)
+    |> actor.Ready(sel)
+  }
+
+  actor.start_spec(actor.Spec(init, 1000, on_concat_message))
+  |> result.replace(process.receive_forever(self))
 }
 
 fn concat_worker(
