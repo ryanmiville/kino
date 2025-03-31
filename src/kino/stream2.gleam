@@ -758,7 +758,43 @@ fn par_concat_pull(
 
 pub fn async_flatten(stream: Stream(Stream(a)), max_open: Int) -> Stream(a) {
   use <- bool.lazy_guard(max_open <= 1, fn() { flatten(stream) })
-  todo
+  use <- Stream
+  let out = process.new_subject()
+  process.start(linked: True, running: fn() {
+    let pool = pool.new(max_open)
+    outer_loop(stream, out, pool)
+  })
+  async_flatten_loop(out)
+}
+
+fn async_flatten_loop(subject: Subject(Option(a))) -> Option(#(a, Stream(a))) {
+  use element <- option.map(process.receive_forever(subject))
+  #(element, Stream(fn() { async_flatten_loop(subject) }))
+}
+
+fn outer_loop(source: Stream(Stream(a)), out, pool: Pool) {
+  case source.pull() {
+    Some(#(stream, next)) -> {
+      pool.spawn(pool, fn() { inner_loop(stream, out) })
+      outer_loop(next, out, pool)
+    }
+    None -> {
+      pool.wait_forever(pool)
+      process.send(out, None)
+    }
+  }
+}
+
+fn inner_loop(stream: Stream(a), out) {
+  case stream.pull() {
+    Some(#(el, next)) -> {
+      process.send(out, Some(el))
+      inner_loop(next, out)
+    }
+    None -> {
+      Nil
+    }
+  }
 }
 
 pub fn concurrently(foreground: Stream(a), background: Stream(b)) -> Stream(a) {
@@ -1033,4 +1069,8 @@ fn on_concat_message(msg: ConcatMessage(a), state: Concat(a)) {
       actor.continue(state)
     }
   }
+}
+
+fn to_channel(stream: Stream(element)) -> channel.Channel(element) {
+  todo
 }

@@ -1,3 +1,4 @@
+import gleam/erlang/process.{type Pid}
 import kino/channel.{type Channel}
 import kino/internal/atomic.{type AtomicInt}
 import kino/waitgroup.{type WaitGroup}
@@ -8,6 +9,7 @@ pub opaque type Pool {
     limiter: AtomicInt,
     tasks: Channel(fn() -> Nil),
     max_size: Int,
+    owner: Pid,
   )
 }
 
@@ -17,6 +19,7 @@ pub fn new(max_size: Int) {
     limiter: atomic.new(),
     tasks: channel.with_capacity(max_size),
     max_size: max_size,
+    owner: process.self(),
   )
 }
 
@@ -39,6 +42,7 @@ pub fn spawn(pool: Pool, running: fn() -> anything) -> Nil {
 }
 
 pub fn wait_forever(pool: Pool) -> Nil {
+  assert_owner(pool)
   channel.close(pool.tasks)
   waitgroup.wait_forever(pool.handle)
 }
@@ -46,4 +50,10 @@ pub fn wait_forever(pool: Pool) -> Nil {
 fn worker(pool: Pool, running: fn() -> anything) -> channel.Closed {
   running()
   channel.each(pool.tasks, fn(f) { f() })
+}
+
+fn assert_owner(pool: Pool) {
+  let assert True = pool.owner == process.self()
+    as "waited on a pool that doesn not belong to this process"
+  Nil
 }

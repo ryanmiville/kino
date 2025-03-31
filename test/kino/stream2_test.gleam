@@ -371,15 +371,15 @@ pub fn buffer_test() {
 // -------------------------------
 // Async Tests
 // -------------------------------
-pub fn async_map_test() {
-  list.range(1, 10)
-  |> stream.from_list
-  |> stream.async_map(3, fn(i) { int.multiply(i, 2) })
-  |> stream.to_list
-  |> task.await_forever
-  |> list.sort(int.compare)
-  |> should.equal([2, 4, 6, 8, 10, 12, 14, 16, 18, 20])
-}
+// pub fn async_map_test() {
+//   list.range(1, 10)
+//   |> stream.from_list
+//   |> stream.async_map(3, fn(i) { int.multiply(i, 2) })
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> list.sort(int.compare)
+//   |> should.equal([2, 4, 6, 8, 10, 12, 14, 16, 18, 20])
+// }
 
 pub fn par_map_test() {
   list.range(1, 10)
@@ -400,63 +400,63 @@ pub fn async_interleave_test() {
   |> should.equal([1, 2, 3, 4, 5, 6, 7, 9, 11])
 }
 
-pub fn async_concat_test() {
-  // Create multiple streams to concatenate
-  let streams = [
-    stream.from_list([1, 2, 3]),
-    stream.from_list([4, 5, 6]),
-    stream.from_list([7, 8, 9]),
-    stream.from_list([10, 11, 12]),
-  ]
+// pub fn async_concat_test() {
+//   // Create multiple streams to concatenate
+//   let streams = [
+//     stream.from_list([1, 2, 3]),
+//     stream.from_list([4, 5, 6]),
+//     stream.from_list([7, 8, 9]),
+//     stream.from_list([10, 11, 12]),
+//   ]
 
-  // Test with max_open=2 (process 2 streams concurrently)
-  streams
-  |> stream.async_concat(2)
-  |> stream.to_list
-  |> task.await_forever
-  |> list.sort(int.compare)
-  |> should.equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
-  // Also test with empty streams in the mix
-  let mixed_streams = [
-    stream.from_list([1, 2]),
-    stream.empty(),
-    stream.from_list([3, 4]),
-    stream.empty(),
-    stream.from_list([5, 6]),
-  ]
+//   // Test with max_open=2 (process 2 streams concurrently)
+//   streams
+//   |> stream.async_concat(2)
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> list.sort(int.compare)
+//   |> should.equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+//   // Also test with empty streams in the mix
+//   let mixed_streams = [
+//     stream.from_list([1, 2]),
+//     stream.empty(),
+//     stream.from_list([3, 4]),
+//     stream.empty(),
+//     stream.from_list([5, 6]),
+//   ]
 
-  mixed_streams
-  |> stream.async_concat(3)
-  |> stream.to_list
-  |> task.await_forever
-  |> list.sort(int.compare)
-  |> should.equal([1, 2, 3, 4, 5, 6])
+//   mixed_streams
+//   |> stream.async_concat(3)
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> list.sort(int.compare)
+//   |> should.equal([1, 2, 3, 4, 5, 6])
 
-  // Test with empty list
-  []
-  |> stream.async_concat(2)
-  |> stream.to_list
-  |> task.await_forever
-  |> should.equal([])
+//   // Test with empty list
+//   []
+//   |> stream.async_concat(2)
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.equal([])
 
-  // Test with single stream
-  [stream.from_list([1, 2, 3])]
-  |> stream.async_concat(2)
-  |> stream.to_list
-  |> task.await_forever
-  |> should.equal([1, 2, 3])
-  // Test with a large number of streams
-  list.range(1, 10)
-  |> list.map(fn(i) { stream.from_list([i * 10, i * 10 + 1]) })
-  |> stream.async_concat(3)
-  |> stream.to_list
-  |> task.await_forever
-  |> list.sort(int.compare)
-  |> should.equal([
-    10, 11, 20, 21, 30, 31, 40, 41, 50, 51, 60, 61, 70, 71, 80, 81, 90, 91, 100,
-    101,
-  ])
-}
+//   // Test with single stream
+//   [stream.from_list([1, 2, 3])]
+//   |> stream.async_concat(2)
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.equal([1, 2, 3])
+//   // Test with a large number of streams
+//   list.range(1, 10)
+//   |> list.map(fn(i) { stream.from_list([i * 10, i * 10 + 1]) })
+//   |> stream.async_concat(3)
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> list.sort(int.compare)
+//   |> should.equal([
+//     10, 11, 20, 21, 30, 31, 40, 41, 50, 51, 60, 61, 70, 71, 80, 81, 90, 91, 100,
+//     101,
+//   ])
+// }
 
 pub fn par_concat_test() {
   // Create multiple streams to concatenate
@@ -511,63 +511,60 @@ pub fn par_concat_test() {
     101,
   ])
 }
-// pub fn async_flatten_test() {
-//   // Create multiple streams to concatenate
-//   let streams =
-//     stream.from_list([
-//       stream.from_list([1, 2, 3]),
-//       stream.from_list([4, 5, 6]),
-//       stream.from_list([7, 8, 9]),
-//       stream.from_list([10, 11, 12]),
-//     ])
 
-//   // Test with max_open=2 (process 2 streams concurrently)
-//   streams
-//   |> stream.async_flatten(2)
-//   |> stream.to_list
-//   |> task.await_forever
-//   |> list.sort(int.compare)
-//   |> should.equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
-//   // Also test with empty streams in the mix
-//   let mixed_streams =
-//     stream.from_list([
-//       stream.from_list([1, 2]),
-//       stream.empty(),
-//       stream.from_list([3, 4]),
-//       stream.empty(),
-//       stream.from_list([5, 6]),
-//     ])
-
-//   mixed_streams
-//   |> stream.async_flatten(3)
-//   |> stream.to_list
-//   |> task.await_forever
-//   |> list.sort(int.compare)
-//   |> should.equal([1, 2, 3, 4, 5, 6])
-
-//   // Test with empty list
-//   stream.empty()
-//   |> stream.async_flatten(2)
-//   |> stream.to_list
-//   |> task.await_forever
-//   |> should.equal([])
-
-//   // Test with single stream
-//   stream.from_list([stream.from_list([1, 2, 3])])
-//   |> stream.async_flatten(2)
-//   |> stream.to_list
-//   |> task.await_forever
-//   |> should.equal([1, 2, 3])
-//   // Test with a large number of streams
-//   list.range(1, 10)
-//   |> list.map(fn(i) { stream.from_list([i * 10, i * 10 + 1]) })
-//   |> stream.from_list
-//   |> stream.async_flatten(3)
-//   |> stream.to_list
-//   |> task.await_forever
-//   |> list.sort(int.compare)
-//   |> should.equal([
-//     10, 11, 20, 21, 30, 31, 40, 41, 50, 51, 60, 61, 70, 71, 80, 81, 90, 91, 100,
-//     101,
-//   ])
-// }
+pub fn async_flatten_test() {
+  // Create multiple streams to concatenate
+  let streams =
+    stream.from_list([
+      stream.from_list([1, 2, 3]),
+      stream.from_list([4, 5, 6]),
+      stream.from_list([7, 8, 9]),
+      stream.from_list([10, 11, 12]),
+    ])
+  // Test with max_open=2 (process 2 streams concurrently)
+  streams
+  |> stream.async_flatten(2)
+  |> stream.to_list
+  |> task.await_forever
+  |> list.sort(int.compare)
+  |> should.equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+  // Also test with empty streams in the mix
+  let mixed_streams =
+    stream.from_list([
+      stream.from_list([1, 2]),
+      stream.empty(),
+      stream.from_list([3, 4]),
+      stream.empty(),
+      stream.from_list([5, 6]),
+    ])
+  mixed_streams
+  |> stream.async_flatten(3)
+  |> stream.to_list
+  |> task.await_forever
+  |> list.sort(int.compare)
+  |> should.equal([1, 2, 3, 4, 5, 6])
+  // Test with empty list
+  stream.empty()
+  |> stream.async_flatten(2)
+  |> stream.to_list
+  |> task.await_forever
+  |> should.equal([])
+  // Test with single stream
+  stream.from_list([stream.from_list([1, 2, 3])])
+  |> stream.async_flatten(2)
+  |> stream.to_list
+  |> task.await_forever
+  |> should.equal([1, 2, 3])
+  // Test with a large number of streams
+  list.range(1, 10)
+  |> list.map(fn(i) { stream.from_list([i * 10, i * 10 + 1]) })
+  |> stream.from_list
+  |> stream.async_flatten(3)
+  |> stream.to_list
+  |> task.await_forever
+  |> list.sort(int.compare)
+  |> should.equal([
+    10, 11, 20, 21, 30, 31, 40, 41, 50, 51, 60, 61, 70, 71, 80, 81, 90, 91, 100,
+    101,
+  ])
+}

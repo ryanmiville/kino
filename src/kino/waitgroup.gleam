@@ -33,9 +33,16 @@ pub fn spawn(wg: WaitGroup, running: fn() -> anything) -> Pid {
 }
 
 pub fn wait_forever(wg: WaitGroup) -> Nil {
+  case atomic.get(wg.counter) {
+    0 -> Nil
+    _ -> wait_loop(wg)
+  }
+}
+
+fn wait_loop(wg: WaitGroup) {
   let _ = process.receive_forever(wg.self)
   case atomic.get(wg.counter) {
     0 -> Nil
-    _ -> wait_forever(wg)
+    _ -> wait_loop(wg)
   }
 }
