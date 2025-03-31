@@ -568,3 +568,99 @@ pub fn async_flatten_test() {
     101,
   ])
 }
+
+pub fn async_filter_test() {
+  // Test with empty stream
+  stream.empty()
+  |> stream.async_filter(3, fn(_) { True })
+  |> stream.to_list
+  |> task.await_forever
+  |> should.equal([])
+
+  // Basic filtering - even numbers
+  list.range(1, 10)
+  |> stream.from_list
+  |> stream.async_filter(3, int.is_even)
+  |> stream.to_list
+  |> task.await_forever
+  |> list.sort(int.compare)
+  // Sort because parallelism might affect order
+  |> should.equal([2, 4, 6, 8, 10])
+
+  // Filter all elements out
+  list.range(1, 10)
+  |> stream.from_list
+  |> stream.async_filter(3, fn(_) { False })
+  |> stream.to_list
+  |> task.await_forever
+  |> should.equal([])
+
+  // Filter no elements out
+  list.range(1, 10)
+  |> stream.from_list
+  |> stream.async_filter(3, fn(_) { True })
+  |> stream.to_list
+  |> task.await_forever
+  |> list.sort(int.compare)
+  |> should.equal(list.range(1, 10))
+
+  // Test with single worker (should behave like regular filter)
+  list.range(1, 10)
+  |> stream.from_list
+  |> stream.async_filter(1, int.is_even)
+  |> stream.to_list
+  |> task.await_forever
+  |> should.equal([2, 4, 6, 8, 10])
+
+  // Test with larger stream and more workers to ensure parallelism works
+  let larger_stream = list.range(1, 100)
+  let result =
+    larger_stream
+    |> stream.from_list
+    |> stream.async_filter(8, int.is_even)
+    |> stream.to_list
+    |> task.await_forever
+    |> list.sort(int.compare)
+
+  // Create the expected result (all even numbers from 1 to 100)
+  let expected =
+    larger_stream
+    |> list.filter(int.is_even)
+
+  result
+  |> should.equal(expected)
+
+  // Test with a predicate that takes time to compute
+  // This helps ensure that parallelism is actually happening
+  let slow_predicate = fn(x) {
+    process.sleep(5)
+    int.is_even(x)
+  }
+
+  // With parallelism, this should complete faster than sequential processing
+  list.range(1, 20)
+  |> stream.from_list
+  |> stream.async_filter(5, slow_predicate)
+  |> stream.to_list
+  |> task.await(300)
+  // Should complete within timeout with parallelism
+  |> list.sort(int.compare)
+  |> should.equal([2, 4, 6, 8, 10, 12, 14, 16, 18, 20])
+
+  // Fallback to regular filter when workers <= 1
+  // Test that it behaves the same as regular filter
+  let reference =
+    list.range(1, 10)
+    |> stream.from_list
+    |> stream.filter(int.is_even)
+    |> stream.to_list
+    |> task.await_forever
+
+  list.range(1, 10)
+  |> stream.from_list
+  |> stream.async_filter(0, int.is_even)
+  // 0 workers should fall back to regular filter
+  |> stream.to_list
+  |> task.await_forever
+  |> should.equal(reference)
+}

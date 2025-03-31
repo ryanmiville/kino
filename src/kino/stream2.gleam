@@ -681,79 +681,7 @@ pub fn par_concat(
 ) -> Stream(element) {
   use <- bool.guard(streams == [], empty())
   use <- bool.lazy_guard(max_open <= 1, fn() { concat(streams) })
-  use <- Stream
-  let pool = pool.new(max_open)
-  let subject = process.new_subject()
-  let #(starts, rest) = list.split(streams, max_open)
-  let assert Ok(source) = from_list(rest) |> start_stream
-  let chan = channel.with_capacity(max_open)
-
-  list.each(starts, fn(s) {
-    pool.spawn(pool, fn() { par_concat_worker_loop(subject, chan, source, s) })
-  })
-
-  let pull = fn() { channel.send(chan, "") }
-  repeat_apply(max_open, pull)
-  par_concat_loop(subject, chan, pool, pull)
-}
-
-fn par_concat_loop(subject, chan, pool, pull) {
-  case process.receive_forever(subject) {
-    Some(element) -> {
-      Some(#(
-        element,
-        Stream(fn() {
-          pull()
-          par_concat_loop(subject, chan, pool, pull)
-        }),
-      ))
-    }
-    None -> {
-      channel.close(chan)
-      pool.wait_forever(pool)
-      drain_subject(subject)
-    }
-  }
-}
-
-fn par_concat_worker_loop(
-  subject: Subject(Option(a)),
-  chan: channel.Channel(f),
-  source: Subject(Pull(Stream(a))),
-  stream: Stream(a),
-) -> Nil {
-  case channel.receive(chan) {
-    Ok(_) -> {
-      par_concat_pull(subject, chan, source, stream)
-    }
-    Error(channel.Closed) -> {
-      Nil
-    }
-  }
-}
-
-fn par_concat_pull(
-  subject: Subject(Option(a)),
-  chan: channel.Channel(f),
-  source: Subject(Pull(Stream(a))),
-  stream: Stream(a),
-) -> Nil {
-  case stream.pull() {
-    Some(#(e, next)) -> {
-      process.send(subject, Some(e))
-      par_concat_worker_loop(subject, chan, source, next)
-    }
-    None -> {
-      case process.try_call_forever(source, Pull) {
-        Ok(Some(stream)) -> {
-          par_concat_pull(subject, chan, source, stream)
-        }
-        _ -> {
-          process.send(subject, None)
-        }
-      }
-    }
-  }
+  async_flatten(from_list(streams), max_open)
 }
 
 pub fn async_flatten(stream: Stream(Stream(a)), max_open: Int) -> Stream(a) {
@@ -764,7 +692,7 @@ pub fn async_flatten(stream: Stream(Stream(a)), max_open: Int) -> Stream(a) {
     let pool = pool.new(max_open)
     outer_loop(stream, out, pool)
   })
-  async_flatten_loop(out)
+  async_drain_loop(out)
 }
 
 fn async_flatten_loop(subject: Subject(Option(a))) -> Option(#(a, Stream(a))) {
@@ -807,8 +735,39 @@ pub fn async_filter(
   keeping predicate: fn(a) -> Bool,
 ) -> Stream(a) {
   use <- bool.lazy_guard(workers <= 1, fn() { filter(stream, predicate) })
+  use <- Stream
+  let out = process.new_subject()
+  process.start(linked: True, running: fn() {
+    let pool = pool.new(workers)
+    async_filter_pull(stream, predicate, out, pool)
+  })
+  async_drain_loop(out)
+}
 
-  todo
+fn async_filter_pull(
+  stream: Stream(a),
+  predicate: fn(a) -> Bool,
+  out: Subject(Option(a)),
+  pool: Pool,
+) -> Nil {
+  case stream.pull() {
+    Some(#(el, next)) -> {
+      pool.spawn(pool, fn() {
+        use <- bool.guard(!predicate(el), Nil)
+        process.send(out, Some(el))
+      })
+      async_filter_pull(next, predicate, out, pool)
+    }
+    None -> {
+      pool.wait_forever(pool)
+      process.send(out, None)
+    }
+  }
+}
+
+fn async_drain_loop(subject) {
+  use element <- option.map(process.receive_forever(subject))
+  #(element, Stream(fn() { async_drain_loop(subject) }))
 }
 
 pub fn async_filter_map(
@@ -817,7 +776,38 @@ pub fn async_filter_map(
   keeping_with f: fn(a) -> Result(b, c),
 ) -> Stream(b) {
   use <- bool.lazy_guard(workers <= 1, fn() { filter_map(stream, f) })
-  todo
+  use <- Stream
+  let out = process.new_subject()
+  process.start(linked: True, running: fn() {
+    let pool = pool.new(workers)
+    async_filter_map_pull(stream, f, out, pool)
+  })
+  async_drain_loop(out)
+}
+
+fn async_filter_map_pull(
+  stream: Stream(a),
+  f: fn(a) -> Result(b, c),
+  out: Subject(Option(b)),
+  pool: Pool,
+) -> Nil {
+  case stream.pull() {
+    Some(#(el, next)) -> {
+      pool.spawn(pool, fn() {
+        case f(el) {
+          Ok(el) -> {
+            process.send(out, Some(el))
+            async_filter_map_pull(next, f, out, pool)
+          }
+          Error(_) -> async_filter_map_pull(next, f, out, pool)
+        }
+      })
+    }
+    None -> {
+      pool.wait_forever(pool)
+      process.send(out, None)
+    }
+  }
 }
 
 // Time ------------------------------------------------------------------------
