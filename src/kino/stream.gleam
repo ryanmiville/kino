@@ -7,7 +7,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/order
 import gleam/otp/actor
 import gleam/otp/task.{type Task}
-import kino/lg
 import kino/pool.{type Pool}
 
 pub opaque type Stream(element) {
@@ -59,25 +58,6 @@ pub fn map(stream: Stream(a), f: fn(a) -> b) -> Stream(b) {
     None -> None
   }
 }
-
-// pub fn async(stream: Stream(a)) -> Stream(a) {
-//   case stream {
-//     Source(_) ->
-//       Flow(fn() { start(stream) |> unsafe_coerce }, unsafe_coerce(identity()))
-//     Flow(source, flow) -> {
-//       let new_source = fn() { start_with_flow(source(), flow) }
-//       Flow(unsafe_coerce(new_source), unsafe_coerce(identity()))
-//     }
-//   }
-// }
-
-// fn start_with_flow(
-//   source: Stage(Dynamic),
-//   flow: fn(Dynamic) -> Action(Dynamic, element),
-// ) -> Stage(element) {
-//   use source <- result.try(source)
-//   flow.start([source], flow)
-// }
 
 pub fn empty() -> Stream(element) {
   Stream(fn() { None })
@@ -377,55 +357,6 @@ pub fn values(stream: Stream(Result(a, e))) -> Stream(a) {
   filter_map(stream, fn(r) { r })
 }
 
-// pub fn buffer(stream: Stream(a), size: Int) -> Stream(a) {
-//   use <- Stream
-//   let buffer = buffer.new(Some(size))
-//   process.start(linked: True, running: fn() { do_buffer(stream, buffer) |> run })
-//   pull_from_buffer(buffer).pull()
-// }
-
-// fn do_buffer(stream: Stream(a), buffer: Buffer(Option(a))) -> Stream(a) {
-//   use <- Stream
-//   case stream.pull() {
-//     Some(#(element, next)) -> {
-//       case buffer.push(buffer, Some(element)) {
-//         Ok(Nil) -> do_buffer(next, buffer).pull()
-//         Error(AtCapacity) -> {
-//           let stream = Stream(fn() { Some(#(element, next)) })
-//           do_buffer(stream, buffer).pull()
-//         }
-//       }
-//     }
-//     // we need to tell downstream that we're done. So push None into the buffer
-//     None -> {
-//       case buffer.push(buffer, None) {
-//         Ok(Nil) -> {
-//           None
-//         }
-//         Error(AtCapacity) -> {
-//           let stream = Stream(fn() { None })
-//           do_buffer(stream, buffer).pull()
-//         }
-//       }
-//     }
-//   }
-// }
-
-// fn pull_from_buffer(buffer: Buffer(Option(a))) -> Stream(a) {
-//   use <- Stream
-//   case buffer.pop(buffer) {
-//     Ok(Some(element)) -> {
-//       Some(#(element, pull_from_buffer(buffer)))
-//     }
-//     Ok(None) -> {
-//       None
-//     }
-//     Error(Nil) -> {
-//       pull_from_buffer(buffer).pull()
-//     }
-//   }
-// }
-
 // Async ------------------------------------------------------------------------
 
 pub fn par_map(
@@ -496,34 +427,6 @@ fn drain_subject(subject) {
     }
     Error(Nil) -> {
       None
-    }
-  }
-}
-
-fn do_async_map(
-  subject: Subject(Option(element)),
-  workers: Int,
-  completed: Int,
-  pull,
-  pool,
-) -> Option(#(element, Stream(element))) {
-  use <- bool.lazy_guard(completed == workers, fn() {
-    lg.shutdown(pool)
-    None
-  })
-
-  case process.receive_forever(subject) {
-    Some(element) -> {
-      Some(#(
-        element,
-        Stream(fn() {
-          pull()
-          do_async_map(subject, workers, completed, pull, pool)
-        }),
-      ))
-    }
-    None -> {
-      do_async_map(subject, workers, completed + 1, pull, pool)
     }
   }
 }
