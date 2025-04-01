@@ -1,5 +1,5 @@
 import gleam/bool
-import gleam/erlang/process.{type Subject, Normal}
+import gleam/erlang/process.{type Subject}
 import gleam/function
 import gleam/int
 import gleam/list
@@ -7,11 +7,8 @@ import gleam/option.{type Option, None, Some}
 import gleam/order
 import gleam/otp/actor
 import gleam/otp/task.{type Task}
-import gleam/result
-import kino/channel
 import kino/lg
 import kino/pool.{type Pool}
-import kino/stream2/internal/buffer.{type Buffer, AtCapacity}
 
 pub opaque type Stream(element) {
   Stream(pull: fn() -> Option(#(element, Stream(element))))
@@ -431,22 +428,6 @@ pub fn values(stream: Stream(Result(a, e))) -> Stream(a) {
 
 // Async ------------------------------------------------------------------------
 
-pub fn async_map(
-  stream: Stream(element),
-  workers: Int,
-  f: fn(element) -> result,
-) -> Stream(result) {
-  use <- bool.lazy_guard(workers <= 1, fn() { map(stream, f) })
-  use <- Stream
-  let assert Ok(stream) = start_stream(stream)
-  let subject = process.new_subject()
-  let assert Ok(pool) = lg.new(workers, map_worker(stream, subject, f))
-  let pull = fn() { lg.send(pool, FromSink(Pull(subject))) }
-  list.repeat(0, workers)
-  |> list.each(fn(_) { pull() })
-  do_async_map(subject, workers, 0, pull, pool)
-}
-
 pub fn par_map(
   stream: Stream(element),
   workers: Int,
@@ -662,23 +643,6 @@ fn do_zip(
   }
 }
 
-pub fn async_concat(
-  streams: List(Stream(element)),
-  max_open: Int,
-) -> Stream(element) {
-  let max_open = int.min(max_open, list.length(streams))
-  use <- bool.lazy_guard(max_open <= 1, fn() { concat(streams) })
-  use <- Stream
-  let source = from_list(streams)
-  let assert Ok(source) = start_stream(source)
-  let subject = process.new_subject()
-  let assert Ok(pool) = lg.new(max_open, concat_worker(source, subject))
-  let pull = fn() { lg.send(pool, ConcatFromSink(Pull(subject))) }
-  list.repeat(0, max_open)
-  |> list.each(fn(_) { pull() })
-  do_async_map(subject, max_open, 0, pull, pool)
-}
-
 pub fn par_concat(
   streams: List(Stream(element)),
   max_open: Int,
@@ -883,6 +847,13 @@ type Interrupt(a) {
 }
 
 pub fn interrupt_when(stream: Stream(a), interrupt: Stream(Bool)) -> Stream(a) {
+  do_interrupt_when(stream, interrupt) |> values
+}
+
+fn do_interrupt_when(
+  stream: Stream(a),
+  interrupt: Stream(Bool),
+) -> Stream(Result(a, Bool)) {
   use <- Stream
   let assert Ok(stream) = start_stream(stream)
   let assert Ok(interrupt) = start_stream(interrupt)
@@ -906,19 +877,22 @@ fn interrupt_loop(
   selector: process.Selector(Interrupt(a)),
   stream_pull: fn() -> Nil,
   interrupt_pull: fn() -> Nil,
-) -> Option(#(a, Stream(a))) {
+) -> Option(#(Result(a, Bool), Stream(Result(a, Bool)))) {
   case process.select_forever(selector) {
     Primary(Some(el)) -> {
       Some(#(
-        el,
+        Ok(el),
         Stream(fn() {
           stream_pull()
           interrupt_loop(selector, stream_pull, interrupt_pull)
         }),
       ))
     }
-    Primary(None) | Interrupter(Some(True)) -> {
+    Primary(None) -> {
       None
+    }
+    Interrupter(Some(True)) -> {
+      Some(#(Error(True), empty()))
     }
     Interrupter(Some(False)) -> {
       interrupt_pull()
@@ -931,13 +905,7 @@ fn interrupt_loop(
 }
 
 pub fn interrupt_after(stream: Stream(a), milliseconds: Int) -> Stream(a) {
-  let interrupt =
-    Stream(fn() {
-      process.sleep(milliseconds)
-      Some(#(True, empty()))
-    })
-
-  interrupt_when(stream, interrupt)
+  timeout(stream, milliseconds) |> values
 }
 
 pub type Timeout {
@@ -948,18 +916,73 @@ pub fn timeout(
   stream: Stream(a),
   milliseconds: Int,
 ) -> Stream(Result(a, Timeout)) {
-  todo
+  let interrupt =
+    Stream(fn() {
+      process.sleep(milliseconds)
+      Some(#(True, empty()))
+    })
+
+  do_interrupt_when(stream, interrupt)
+  |> map(fn(el) {
+    case el {
+      Ok(el) -> Ok(el)
+      Error(_) -> Error(Timeout)
+    }
+  })
+}
+
+type TimeoutOnPull(a) {
+  TopTimeout
+  TopStream(Option(a))
 }
 
 pub fn timeout_on_pull(
   stream: Stream(a),
   milliseconds: Int,
 ) -> Stream(Result(a, Timeout)) {
-  todo
+  use <- Stream
+  let assert Ok(stream) = start_stream(stream)
+
+  let stream_sub = process.new_subject()
+  let timeout_sub = process.new_subject()
+
+  let stream_pull = fn() {
+    process.send(stream, Pull(stream_sub))
+    process.send_after(timeout_sub, milliseconds, TopTimeout)
+  }
+
+  let timer = stream_pull()
+
+  process.new_selector()
+  |> process.selecting(stream_sub, TopStream)
+  |> process.selecting(timeout_sub, function.identity)
+  |> timeout_on_pull_loop(stream_pull, timer)
 }
 
-pub fn awake_every(milliseconds: Int) -> Stream(a) {
-  todo
+fn timeout_on_pull_loop(
+  selector: process.Selector(TimeoutOnPull(a)),
+  stream_pull: fn() -> process.Timer,
+  timer: process.Timer,
+) -> Option(#(Result(a, Timeout), Stream(Result(a, Timeout)))) {
+  case process.select_forever(selector) {
+    TopStream(Some(el)) -> {
+      process.cancel_timer(timer)
+      Some(#(
+        Ok(el),
+        Stream(fn() {
+          let timer = stream_pull()
+          timeout_on_pull_loop(selector, stream_pull, timer)
+        }),
+      ))
+    }
+    TopStream(None) -> {
+      process.cancel_timer(timer)
+      None
+    }
+    TopTimeout -> {
+      Some(#(Error(Timeout), empty()))
+    }
+  }
 }
 
 pub type BackoffStrategy
@@ -968,32 +991,177 @@ pub fn retry(
   stream: Stream(Result(a, err)),
   strategy: BackoffStrategy,
   max_attempts: Int,
-) -> Stream(a) {
+) -> Stream(Result(a, err)) {
   todo
 }
 
 pub fn sleep(milliseconds: Int) -> Stream(a) {
-  todo
+  use <- Stream
+  process.sleep(milliseconds)
+  None
 }
 
 pub fn metered(stream: Stream(a), milliseconds: Int) -> Stream(a) {
-  todo
+  let meter = repeatedly(fn() { process.sleep(milliseconds) })
+  async_zip(stream, meter)
+  |> map(fn(tup) { tup.0 })
 }
 
 pub fn spaced(stream: Stream(a), milliseconds: Int) -> Stream(a) {
-  todo
+  let spacer = repeatedly(fn() { process.sleep(milliseconds) }) |> map(Error)
+  let stream = stream |> map(Ok)
+  interleave(stream, spacer)
+  |> values
 }
 
 pub fn keep_alive(stream: Stream(a), heartbeat: a, max_idle: Int) -> Stream(a) {
-  todo
+  use <- Stream
+  let assert Ok(stream) = start_stream(stream)
+
+  let stream_sub = process.new_subject()
+  let timeout_sub = process.new_subject()
+
+  let stream_pull = fn() { process.send(stream, Pull(stream_sub)) }
+
+  let start_timer = fn() {
+    process.send_after(timeout_sub, max_idle, TopTimeout)
+  }
+
+  stream_pull()
+  let timer = start_timer()
+
+  process.new_selector()
+  |> process.selecting(stream_sub, TopStream)
+  |> process.selecting(timeout_sub, function.identity)
+  |> keep_alive_loop(stream_pull, start_timer, heartbeat, timer)
+}
+
+fn keep_alive_loop(
+  selector: process.Selector(TimeoutOnPull(a)),
+  stream_pull: fn() -> Nil,
+  start_timer: fn() -> process.Timer,
+  heartbeat: a,
+  timer: process.Timer,
+) -> Option(#(a, Stream(a))) {
+  case process.select_forever(selector) {
+    TopStream(Some(el)) -> {
+      process.cancel_timer(timer)
+      Some(#(
+        el,
+        Stream(fn() {
+          stream_pull()
+          let timer = start_timer()
+          keep_alive_loop(selector, stream_pull, start_timer, heartbeat, timer)
+        }),
+      ))
+    }
+    TopStream(None) -> {
+      process.cancel_timer(timer)
+      None
+    }
+    TopTimeout -> {
+      Some(#(
+        heartbeat,
+        Stream(fn() {
+          let timer = start_timer()
+          keep_alive_loop(selector, stream_pull, start_timer, heartbeat, timer)
+        }),
+      ))
+    }
+  }
 }
 
 pub fn chunk_within(
   stream: Stream(a),
   max_size: Int,
   milliseconds: Int,
-) -> Stream(a) {
-  todo
+) -> Stream(List(a)) {
+  use <- Stream
+  let assert Ok(stream) = start_stream(stream)
+
+  let stream_sub = process.new_subject()
+  let timeout_sub = process.new_subject()
+
+  let stream_pull = fn() { process.send(stream, Pull(stream_sub)) }
+
+  let start_timer = fn() {
+    process.send_after(timeout_sub, milliseconds, TopTimeout)
+  }
+
+  stream_pull()
+  let timer = start_timer()
+
+  process.new_selector()
+  |> process.selecting(stream_sub, TopStream)
+  |> process.selecting(timeout_sub, function.identity)
+  |> chunk_within_loop(stream_pull, start_timer, timer, max_size, max_size, [])
+}
+
+fn chunk_within_loop(
+  selector,
+  stream_pull,
+  start_timer,
+  timer,
+  max_size,
+  space_left,
+  chunk,
+) {
+  case process.select_forever(selector) {
+    TopStream(Some(el)) -> {
+      case space_left {
+        1 -> {
+          process.cancel_timer(timer)
+          let timer = start_timer()
+          Some(#(
+            list.reverse(chunk),
+            Stream(fn() {
+              chunk_within_loop(
+                selector,
+                stream_pull,
+                start_timer,
+                timer,
+                max_size,
+                max_size,
+                [],
+              )
+            }),
+          ))
+        }
+        _ -> {
+          chunk_within_loop(
+            selector,
+            stream_pull,
+            start_timer,
+            timer,
+            max_size,
+            space_left - 1,
+            [el, ..chunk],
+          )
+        }
+      }
+    }
+    TopStream(None) -> {
+      process.cancel_timer(timer)
+      None
+    }
+    TopTimeout -> {
+      let timer = start_timer()
+      Some(#(
+        list.reverse(chunk),
+        Stream(fn() {
+          chunk_within_loop(
+            selector,
+            stream_pull,
+            start_timer,
+            timer,
+            max_size,
+            max_size,
+            [],
+          )
+        }),
+      ))
+    }
+  }
 }
 
 // Actors ----------------------------------------------------------------------
@@ -1022,165 +1190,4 @@ fn on_message(
       actor.continue(Stream(fn() { None }))
     }
   }
-}
-
-type Map(a, b) {
-  Map(
-    source: Subject(Pull(a)),
-    as_sink: Subject(Option(a)),
-    as_source: Subject(Pull(b)),
-    reply_to: Subject(Option(b)),
-    f: fn(a) -> b,
-  )
-}
-
-type MapMessage(a, b) {
-  FromSource(Option(a))
-  FromSink(Pull(b))
-}
-
-// fn start_map(
-//   source: Subject(Pull(a)),
-//   reply_to: Subject(Option(b)),
-//   f: fn(a) -> b,
-// ) -> Result(Subject(Pull(b)), actor.StartError) {
-//   let sub = process.new_subject()
-//   let init = fn() {
-//     let as_sink = process.new_subject()
-//     let as_source = process.new_subject()
-//     let sel =
-//       process.new_selector()
-//       |> process.selecting(as_sink, FromSource)
-//       |> process.selecting(as_source, FromSink)
-
-//     process.send(source, Pull(as_sink))
-
-//     process.send(sub, as_source)
-//     Map(f:, as_sink:, as_source:, source:, reply_to:)
-//     |> actor.Ready(sel)
-//   }
-//   actor.start_spec(actor.Spec(init, 1000, on_map))
-//   |> result.replace(process.receive_forever(sub))
-// }
-
-fn map_worker(
-  source: Subject(Pull(a)),
-  reply_to: Subject(Option(b)),
-  f: fn(a) -> b,
-) -> lg.WorkerSpec(Map(a, b), MapMessage(a, b)) {
-  let sub = process.new_subject()
-  let init = fn(selector) {
-    let as_sink = process.new_subject()
-    let as_source = process.new_subject()
-    let sel =
-      selector
-      |> process.selecting(as_sink, FromSource)
-      |> process.selecting(as_source, FromSink)
-
-    process.send(sub, as_source)
-    Map(f:, as_sink:, as_source:, source:, reply_to:)
-    |> actor.Ready(sel)
-  }
-
-  lg.worker(init, 1000, on_map)
-}
-
-fn on_map(msg: MapMessage(a, b), state: Map(a, b)) {
-  case msg {
-    FromSource(Some(element)) -> {
-      process.send(state.reply_to, Some(state.f(element)))
-      actor.continue(state)
-    }
-    FromSource(None) -> {
-      process.send(state.reply_to, None)
-      actor.continue(state)
-    }
-    FromSink(_) -> {
-      process.send(state.source, Pull(state.as_sink))
-      actor.continue(state)
-    }
-  }
-}
-
-type ConcatMessage(a) {
-  ConcatFromSink(Pull(a))
-  ConcatFromSource(Option(Stream(a)))
-}
-
-type Concat(a) {
-  Concat(
-    stream: Stream(a),
-    as_sink: Subject(Option(Stream(a))),
-    source: Subject(Pull(Stream(a))),
-    reply_to: Subject(Option(a)),
-  )
-}
-
-fn start_concat(
-  source: Subject(Pull(Stream(a))),
-  stream: Stream(a),
-  reply_to: Subject(Option(a)),
-) -> Result(Subject(Pull(a)), actor.StartError) {
-  let self = process.new_subject()
-  let init = fn() {
-    let as_sink = process.new_subject()
-    let as_source = process.new_subject()
-    let sel =
-      process.new_selector()
-      |> process.selecting(as_sink, ConcatFromSource)
-      |> process.selecting(as_source, ConcatFromSink)
-
-    process.send(self, as_source)
-    Concat(stream:, as_sink:, source:, reply_to:)
-    |> actor.Ready(sel)
-  }
-
-  actor.start_spec(actor.Spec(init, 1000, on_concat_message))
-  |> result.replace(process.receive_forever(self))
-}
-
-fn concat_worker(
-  source: Subject(Pull(Stream(a))),
-  reply_to: Subject(Option(a)),
-) -> lg.WorkerSpec(Concat(a), ConcatMessage(a)) {
-  let init = fn(selector) {
-    let as_sink = process.new_subject()
-    let sel =
-      selector
-      |> process.selecting(as_sink, ConcatFromSource)
-
-    Concat(stream: empty(), as_sink:, source:, reply_to:)
-    |> actor.Ready(sel)
-  }
-
-  lg.worker(init, 1000, on_concat_message)
-}
-
-fn on_concat_message(msg: ConcatMessage(a), state: Concat(a)) {
-  case msg {
-    ConcatFromSink(Pull(_)) -> {
-      case state.stream.pull() {
-        Some(#(e, next)) -> {
-          process.send(state.reply_to, Some(e))
-          actor.continue(Concat(..state, stream: next))
-        }
-        None -> {
-          process.send(state.source, Pull(state.as_sink))
-          actor.continue(state)
-        }
-      }
-    }
-    ConcatFromSource(Some(stream)) -> {
-      let state = Concat(..state, stream: stream)
-      on_concat_message(ConcatFromSink(Pull(state.reply_to)), state)
-    }
-    ConcatFromSource(None) -> {
-      process.send(state.reply_to, None)
-      actor.continue(state)
-    }
-  }
-}
-
-fn to_channel(stream: Stream(element)) -> channel.Channel(element) {
-  todo
 }

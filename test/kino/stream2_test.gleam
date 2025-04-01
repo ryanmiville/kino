@@ -784,3 +784,116 @@ pub fn async_filter_map_test() {
   |> list.sort(int.compare)
   |> should.equal(reference |> list.sort(int.compare))
 }
+// Time ------------------------------------------------------------------------
+
+// pub fn interrupt_when_test() {
+//   // Test that stream is interrupted immediately when the interrupt stream starts with True
+//   stream.range(1, 100)
+//   |> stream.interrupt_when(stream.single(True))
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.equal([])
+
+//   // Test that stream is not interrupted when the interrupt stream starts with False
+//   stream.range(1, 5)
+//   |> stream.interrupt_when(stream.single(False))
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.equal([1, 2, 3, 4, 5])
+
+//   // Test that stream is interrupted after specific elements
+//   // Here we interrupt after 3 elements
+//   let interrupt_after_3 = stream.from_list([False, False, False, True])
+
+//   stream.range(1, 10)
+//   |> stream.interrupt_when(interrupt_after_3)
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.equal([1, 2, 3])
+
+//   // Test with interrupt that never happens (all False)
+//   stream.range(1, 5)
+//   |> stream.interrupt_when(stream.repeat(False))
+//   |> stream.take(5)
+//   // limit to avoid infinite stream
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.equal([1, 2, 3, 4, 5])
+
+//   // Test with empty stream
+//   stream.empty()
+//   |> stream.interrupt_when(stream.single(True))
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.equal([])
+
+//   // Test that interrupt stream shorter than main stream works correctly
+//   // Shorter interrupt stream should allow main stream to complete
+//   stream.range(1, 10)
+//   |> stream.interrupt_when(stream.from_list([False, False]))
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.equal([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+
+//   // Test with delayed interrupt
+//   // Create an interrupt stream that sleeps before emitting True
+//   let delayed_interrupt = {
+//     use <- stream.emit(False)
+//     use <- stream.emit(False)
+//     process.sleep(50)
+//     stream.single(True)
+//   }
+
+//   // The main stream emits elements with a small delay
+//   let slow_stream =
+//     stream.range(1, 10)
+//     |> stream.map(fn(i) {
+//       process.sleep(10)
+//       i
+//     })
+
+//   // This should capture some elements before being interrupted
+//   slow_stream
+//   |> stream.interrupt_when(delayed_interrupt)
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.be_ok
+
+//   // Test with a non-deterministic interrupt
+//   // Here we use a stream that emits True after a random element
+//   let random_interrupt =
+//     stream.range(0, 20)
+//     |> stream.map(fn(i) {
+//       // At some point, emit True to interrupt
+//       i > 5 && i < 10
+//     })
+
+//   stream.range(1, 20)
+//   |> stream.interrupt_when(random_interrupt)
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.be_ok
+
+//   // Test with interrupt stream that emits False and then True repeatedly
+//   let oscillating_interrupt =
+//     stream.from_list([False, False, True, False, False])
+
+//   // Should stop at the first True
+//   stream.range(1, 10)
+//   |> stream.interrupt_when(oscillating_interrupt)
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.equal([1, 2])
+
+//   // Test interruption of an infinite stream
+//   stream.repeat(1)
+//   |> stream.interrupt_when({
+//     use <- stream.emit(False)
+//     use <- stream.emit(False)
+//     use <- stream.emit(False)
+//     stream.single(True)
+//   })
+//   |> stream.to_list
+//   |> task.await_forever
+//   |> should.equal([1, 1, 1])
+// }
