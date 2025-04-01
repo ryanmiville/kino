@@ -376,54 +376,58 @@ fn do_drain(stream: Stream(a)) -> Option(nothing) {
   }
 }
 
-pub fn buffer(stream: Stream(a), size: Int) -> Stream(a) {
-  use <- Stream
-  let buffer = buffer.new(Some(size))
-  process.start(linked: True, running: fn() { do_buffer(stream, buffer) |> run })
-  pull_from_buffer(buffer).pull()
+pub fn values(stream: Stream(Result(a, e))) -> Stream(a) {
+  filter_map(stream, fn(r) { r })
 }
 
-fn do_buffer(stream: Stream(a), buffer: Buffer(Option(a))) -> Stream(a) {
-  use <- Stream
-  case stream.pull() {
-    Some(#(element, next)) -> {
-      case buffer.push(buffer, Some(element)) {
-        Ok(Nil) -> do_buffer(next, buffer).pull()
-        Error(AtCapacity) -> {
-          let stream = Stream(fn() { Some(#(element, next)) })
-          do_buffer(stream, buffer).pull()
-        }
-      }
-    }
-    // we need to tell downstream that we're done. So push None into the buffer
-    None -> {
-      case buffer.push(buffer, None) {
-        Ok(Nil) -> {
-          None
-        }
-        Error(AtCapacity) -> {
-          let stream = Stream(fn() { None })
-          do_buffer(stream, buffer).pull()
-        }
-      }
-    }
-  }
-}
+// pub fn buffer(stream: Stream(a), size: Int) -> Stream(a) {
+//   use <- Stream
+//   let buffer = buffer.new(Some(size))
+//   process.start(linked: True, running: fn() { do_buffer(stream, buffer) |> run })
+//   pull_from_buffer(buffer).pull()
+// }
 
-fn pull_from_buffer(buffer: Buffer(Option(a))) -> Stream(a) {
-  use <- Stream
-  case buffer.pop(buffer) {
-    Ok(Some(element)) -> {
-      Some(#(element, pull_from_buffer(buffer)))
-    }
-    Ok(None) -> {
-      None
-    }
-    Error(Nil) -> {
-      pull_from_buffer(buffer).pull()
-    }
-  }
-}
+// fn do_buffer(stream: Stream(a), buffer: Buffer(Option(a))) -> Stream(a) {
+//   use <- Stream
+//   case stream.pull() {
+//     Some(#(element, next)) -> {
+//       case buffer.push(buffer, Some(element)) {
+//         Ok(Nil) -> do_buffer(next, buffer).pull()
+//         Error(AtCapacity) -> {
+//           let stream = Stream(fn() { Some(#(element, next)) })
+//           do_buffer(stream, buffer).pull()
+//         }
+//       }
+//     }
+//     // we need to tell downstream that we're done. So push None into the buffer
+//     None -> {
+//       case buffer.push(buffer, None) {
+//         Ok(Nil) -> {
+//           None
+//         }
+//         Error(AtCapacity) -> {
+//           let stream = Stream(fn() { None })
+//           do_buffer(stream, buffer).pull()
+//         }
+//       }
+//     }
+//   }
+// }
+
+// fn pull_from_buffer(buffer: Buffer(Option(a))) -> Stream(a) {
+//   use <- Stream
+//   case buffer.pop(buffer) {
+//     Ok(Some(element)) -> {
+//       Some(#(element, pull_from_buffer(buffer)))
+//     }
+//     Ok(None) -> {
+//       None
+//     }
+//     Error(Nil) -> {
+//       pull_from_buffer(buffer).pull()
+//     }
+//   }
+// }
 
 // Async ------------------------------------------------------------------------
 
@@ -725,8 +729,71 @@ fn inner_loop(stream: Stream(a), out) {
   }
 }
 
+type Concurrently(a, b) {
+  Foreground(Option(a))
+  Background(Option(b))
+}
+
+/// if foreground finishes first, background will be stopped. If background
+/// finishes first, foreground will NOT be stopped
 pub fn concurrently(foreground: Stream(a), background: Stream(b)) -> Stream(a) {
-  todo
+  use <- Stream
+  let assert Ok(foreground) = start_stream(foreground)
+  let assert Ok(background) = start_stream(background)
+
+  let fg_sub = process.new_subject()
+  let bg_sub = process.new_subject()
+
+  let fg_pull = fn() { process.send(foreground, Pull(fg_sub)) }
+  let bg_pull = fn() { process.send(background, Pull(bg_sub)) }
+
+  fg_pull()
+  bg_pull()
+
+  process.new_selector()
+  |> process.selecting(fg_sub, Foreground)
+  |> process.selecting(bg_sub, Background)
+  |> concurrently_loop(fg_pull, bg_pull)
+}
+
+fn concurrently_loop(
+  selector: process.Selector(Concurrently(a, b)),
+  fg_pull: fn() -> Nil,
+  bg_pull: fn() -> Nil,
+) -> Option(#(a, Stream(a))) {
+  case process.select_forever(selector) {
+    Foreground(Some(el)) -> {
+      Some(#(
+        el,
+        Stream(fn() {
+          fg_pull()
+          concurrently_loop(selector, fg_pull, bg_pull)
+        }),
+      ))
+    }
+    Foreground(None) -> {
+      None
+    }
+    Background(Some(_)) -> {
+      bg_pull()
+      concurrently_loop(selector, fg_pull, bg_pull)
+    }
+    Background(None) -> {
+      concurrently_loop(selector, fg_pull, bg_pull)
+    }
+  }
+}
+
+fn run_background(interrupt, stream: Stream(a)) {
+  case process.receive(interrupt, 0) {
+    Error(_) -> {
+      case stream.pull() {
+        None -> Nil
+        Some(#(_, next)) -> run_background(interrupt, next)
+      }
+    }
+    Ok(_) -> Nil
+  }
 }
 
 pub fn async_filter(
@@ -795,13 +862,11 @@ fn async_filter_map_pull(
     Some(#(el, next)) -> {
       pool.spawn(pool, fn() {
         case f(el) {
-          Ok(el) -> {
-            process.send(out, Some(el))
-            async_filter_map_pull(next, f, out, pool)
-          }
-          Error(_) -> async_filter_map_pull(next, f, out, pool)
+          Ok(el) -> process.send(out, Some(el))
+          Error(_) -> Nil
         }
       })
+      async_filter_map_pull(next, f, out, pool)
     }
     None -> {
       pool.wait_forever(pool)
@@ -812,12 +877,67 @@ fn async_filter_map_pull(
 
 // Time ------------------------------------------------------------------------
 
+type Interrupt(a) {
+  Primary(Option(a))
+  Interrupter(Option(Bool))
+}
+
 pub fn interrupt_when(stream: Stream(a), interrupt: Stream(Bool)) -> Stream(a) {
-  todo
+  use <- Stream
+  let assert Ok(stream) = start_stream(stream)
+  let assert Ok(interrupt) = start_stream(interrupt)
+
+  let stream_sub = process.new_subject()
+  let interrupt_sub = process.new_subject()
+
+  let stream_pull = fn() { process.send(stream, Pull(stream_sub)) }
+  let interrupt_pull = fn() { process.send(interrupt, Pull(interrupt_sub)) }
+
+  stream_pull()
+  interrupt_pull()
+
+  process.new_selector()
+  |> process.selecting(stream_sub, Primary)
+  |> process.selecting(interrupt_sub, Interrupter)
+  |> interrupt_loop(stream_pull, interrupt_pull)
+}
+
+fn interrupt_loop(
+  selector: process.Selector(Interrupt(a)),
+  stream_pull: fn() -> Nil,
+  interrupt_pull: fn() -> Nil,
+) -> Option(#(a, Stream(a))) {
+  case process.select_forever(selector) {
+    Primary(Some(el)) -> {
+      Some(#(
+        el,
+        Stream(fn() {
+          stream_pull()
+          interrupt_loop(selector, stream_pull, interrupt_pull)
+        }),
+      ))
+    }
+    Primary(None) | Interrupter(Some(True)) -> {
+      None
+    }
+    Interrupter(Some(False)) -> {
+      interrupt_pull()
+      interrupt_loop(selector, stream_pull, interrupt_pull)
+    }
+    Interrupter(None) -> {
+      interrupt_loop(selector, stream_pull, interrupt_pull)
+    }
+  }
 }
 
 pub fn interrupt_after(stream: Stream(a), milliseconds: Int) -> Stream(a) {
-  todo
+  let interrupt =
+    Stream(fn() {
+      process.sleep(milliseconds)
+      Some(#(True, empty()))
+    })
+
+  interrupt_when(stream, interrupt)
 }
 
 pub type Timeout {
