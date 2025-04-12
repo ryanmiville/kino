@@ -244,7 +244,7 @@ fn dispatch_senders(
   }
 }
 
-// BUFFER --------------------------------------------------------------------------------
+// BUFFER ----------------------------------------------------------------------
 type Buffer(a) {
   Buffer(queue: Deque(a), counter: Int, capacity: Option(Int))
 }

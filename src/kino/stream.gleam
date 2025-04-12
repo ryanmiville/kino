@@ -651,18 +651,6 @@ fn concurrently_loop(
   }
 }
 
-fn run_background(interrupt, stream: Stream(a)) {
-  case process.receive(interrupt, 0) {
-    Error(_) -> {
-      case stream.pull() {
-        None -> Nil
-        Some(#(_, next)) -> run_background(interrupt, next)
-      }
-    }
-    Ok(_) -> Nil
-  }
-}
-
 pub fn async_filter(
   stream: Stream(a),
   workers: Int,
